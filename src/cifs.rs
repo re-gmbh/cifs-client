@@ -7,13 +7,13 @@ use crate::error::Error;
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
 
 
-struct CIFS {
+pub struct CIFS {
     stream: TcpStream,
 }
 
 
 impl CIFS {
-    fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream) -> Self {
         CIFS {
             stream,
         }

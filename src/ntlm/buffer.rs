@@ -1,5 +1,3 @@
-use std::io;
-
 use bytes::{Bytes, Buf, BytesMut, BufMut};
 
 use super::Error;

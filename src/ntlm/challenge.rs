@@ -1,4 +1,4 @@
-use bytes::{Bytes, Buf, BytesMut, BufMut};
+use bytes::{Bytes, Buf, BytesMut};
 
 use super::buffer::Buffer;
 use super::packet::Packet;

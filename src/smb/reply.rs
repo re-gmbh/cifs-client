@@ -1,4 +1,4 @@
-use bytes::{Bytes, Buf, BytesMut};
+use bytes::{Bytes, Buf};
 
 use super::common::*;
 
@@ -33,28 +33,26 @@ pub enum Reply {
 }
 
 impl Reply {
-    fn parse(cmd: RawCmd, buffer: &mut Bytes) -> Result<(Self, Option<AndX>), Error> {
+    fn parse(cmd: RawCmd, info: &Info, andx: &mut Option<AndX>, buffer: &mut Bytes) -> Result<Self, Error> {
         let parameter_count = buffer.get_u8() as usize;
         let mut parameter = buffer.copy_to_bytes(2*parameter_count);
 
         let data_count = buffer.get_u16_le() as usize;
         let data = buffer.copy_to_bytes(data_count);
 
-        let andx = if cmd.has_andx() {
-            AndX::parse(&mut parameter)?
+        // first parameter is AndX structure, if this command has one
+        if cmd.has_andx() {
+            *andx = AndX::parse(&mut parameter)?;
         } else {
-            None
-        };
+            *andx = None;
+        }
 
-        let reply = match cmd {
+        match cmd {
             RawCmd::Negotiate => Reply::parse_negotiate(parameter, data),
-            RawCmd::SessionSetup => Reply::parse_session_setup(parameter, data),
+            RawCmd::SessionSetup => Reply::parse_session_setup(info, parameter, data),
 
             _ => Err(Error::Unsupported),
-        }?;
-
-
-        Ok((reply, andx))
+        }
     }
 
 
@@ -118,7 +116,7 @@ impl Reply {
         Ok(Reply::Negotiate(server_setup))
     }
 
-    fn parse_session_setup(mut parameter: Bytes, mut data: Bytes) -> Result<Self, Error> {
+    fn parse_session_setup(info: &Info, mut parameter: Bytes, mut data: Bytes) -> Result<Self, Error> {
         // parse parameter
         let action = parameter.get_u16_le();
         let blob_length = parameter.get_u16_le() as usize;
@@ -187,17 +185,15 @@ impl SMBReply {
         //
         // now parse replies
         // 
-        // TODO: add info reference to reply parser
-        //
         let mut replies = Vec::new();
+        let mut maybe_andx: Option<AndX> = None;
 
-        let (reply, mut maybe_andx) = Reply::parse(cmd, &mut parse)?;
+        let reply = Reply::parse(cmd, &info, &mut maybe_andx, &mut parse)?;
         replies.push(reply);
 
-        while let Some(andx) = maybe_andx {
+        while let Some(ref andx) = maybe_andx {
             let mut parse = buffer.slice((andx.offset as usize)..);
-            let (reply, maybe_more) = Reply::parse(andx.cmd, &mut parse)?;
-            maybe_andx = maybe_more;
+            let reply = Reply::parse(andx.cmd, &info, &mut maybe_andx, &mut parse)?;
             replies.push(reply);
         }
 
@@ -208,6 +204,7 @@ impl SMBReply {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
     use hex_literal::hex;
     use super::*;
 

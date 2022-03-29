@@ -1,4 +1,4 @@
-use bytes::{BytesMut, BufMut, Buf};
+use bytes::{BytesMut, BufMut};
 
 use super::buffer::Buffer;
 use super::Error;
