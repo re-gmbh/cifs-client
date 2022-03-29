@@ -3,19 +3,21 @@ use hex_literal::hex;
 use bytes::{Bytes, BytesMut, BufMut};
 
 use crate::utils;
-use super::{Error, Challenge};
+use super::{Error, ChallengeMsg};
 
 
 pub struct Auth {
     pub user: String,
+    pub workstation: String,
     pub domain: String,
     pub password: String,
 }
 
 impl Auth {
-    pub fn new(user: &str, domain: &str, password: &str) -> Self {
+    pub fn new(user: &str, workstation: &str, domain: &str, password: &str) -> Self {
         Auth {
             user: user.to_owned(),
+            workstation: workstation.to_owned(),
             domain: domain.to_owned(),
             password: password.to_owned(),
         }
@@ -37,7 +39,7 @@ impl Auth {
         utils::hmac_md5_oneshot(&key, &data)
     }
 
-    pub fn response(&self, challenge: &Challenge) -> Result<([u8; 16], Bytes), Error> {
+    pub fn authenticate(&self, challenge_msg: &ChallengeMsg) -> Result<([u8; 16], Bytes), Error> {
         let mut random = [0u8; 8];
         OsRng.fill_bytes(&mut random);
 
@@ -49,12 +51,12 @@ impl Auth {
         //blob.put(hex!("0090d336b734c301").as_slice()); // XXX fake time
         //blob.put(hex!("ffffff0011223344").as_slice()); // XXX fake random
         blob.put_u32_le(0);
-        blob.extend_from_slice(&challenge.info[..]);
+        blob.extend_from_slice(&challenge_msg.info[..]);
         blob.put_u32_le(0);
 
 
-        let mut data = BytesMut::with_capacity(challenge.challenge.len() + blob.len());
-        data.put(&challenge.challenge[..]);
+        let mut data = BytesMut::with_capacity(challenge_msg.challenge.len() + blob.len());
+        data.put(&challenge_msg.challenge[..]);
         data.put(&blob[..]);
 
         let key = self.ntlmv2_hash();
@@ -76,7 +78,7 @@ mod tests {
 
     #[test]
     fn ntlm_hash() {
-        let auth = Auth::new("user", "DOMAIN", "SecREt01");
+        let auth = Auth::new("user", "workstation", "DOMAIN", "SecREt01");
         let hash = auth.ntlm_hash();
 
         assert_eq!(hash, hex!("cd06ca7c7e10c99b1d33b7485a2ed808"));
@@ -84,7 +86,7 @@ mod tests {
 
     #[test]
     fn ntlmv2_hash() {
-        let auth = Auth::new("user", "DOMAIN", "SecREt01");
+        let auth = Auth::new("user", "workstation", "DOMAIN", "SecREt01");
         let hash = auth.ntlmv2_hash();
 
         assert_eq!(hash, hex!("04b8e0ba74289cc540826bab1dee63ae"));
@@ -93,8 +95,6 @@ mod tests {
     /*
     #[test]
     fn challenge_response() {
-        use crate::ntlm::NTLM;
-
         let msg_challenge = Bytes::from(hex!(
                 "4e544c4d53535000020000000c000c003000000001028100"
                 "0123456789abcdef0000000000000000620062003c000000"
@@ -104,17 +104,13 @@ mod tests {
                 "7300650072007600650072002e0064006f006d0061006900"
                 "6e002e0063006f006d0000000000").as_ref());
 
-        let mut ntlm = NTLM::new();
-        ntlm.parse_challenge_msg(&msg_challenge)
-            .expect("can't read ntlm challenge");
-
-        let challenge = ntlm.challenge
-                            .expect("challenge is missing");
+        let challenge = ChallengeMsg::parse(&msg_challenge)
+            .expect("can't parse NTLM challenge");
 
 
-        let auth = Auth::new("user", "DOMAIN", "SecREt01");
-        let (_, response) = auth.response(&challenge)
-                                .expect("can't create response to challenge");
+        let auth = Auth::new("user", "WORKSTATION", "DOMAIN", "SecREt01");
+        let (_, response) = auth.authenticate(&challenge)
+                                .expect("can't authenticate challenge");
 
         assert_eq!(&response[..], hex!("cbabbca713eb795d04c97abc01ee4983"
                                   "01010000000000000090d336b734c301"
