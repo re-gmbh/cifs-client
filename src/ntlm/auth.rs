@@ -44,25 +44,26 @@ impl Auth {
         // generate blob
         let mut blob = BytesMut::with_capacity(1024);
         blob.put(hex!("0101000000000000").as_slice());
-        //blob.put_u64_le(utils::get_windows_time());
-        //blob.put(random.as_slice());
-        blob.put(hex!("0090d336b734c301").as_slice()); // XXX fake time
-        blob.put(hex!("ffffff0011223344").as_slice()); // XXX fake random
+        blob.put_u64_le(utils::get_windows_time());
+        blob.put(random.as_slice());
+        //blob.put(hex!("0090d336b734c301").as_slice()); // XXX fake time
+        //blob.put(hex!("ffffff0011223344").as_slice()); // XXX fake random
         blob.put_u32_le(0);
-        blob.extend_from_slice(challenge.info.as_slice());
+        blob.extend_from_slice(&challenge.info[..]);
         blob.put_u32_le(0);
 
 
-        let mut data = Vec::from(challenge.challenge);
-        data.extend_from_slice(&blob[..]);
+        let mut data = BytesMut::with_capacity(challenge.challenge.len() + blob.len());
+        data.put(&challenge.challenge[..]);
+        data.put(&blob[..]);
 
         let key = self.ntlmv2_hash();
         let tag = utils::hmac_md5_oneshot(&key, &data);
         let sk = utils::hmac_md5_oneshot(&key, &tag);
 
         let mut result = BytesMut::with_capacity(tag.len() + blob.len());
-        result.put(&tag[..]);
-        result.put(&blob[..]);
+        result.put(tag.as_slice());
+        result.put(blob);
 
         Ok((sk, result.freeze()))
     }
@@ -71,10 +72,10 @@ impl Auth {
 #[cfg(test)]
 mod tests {
     use hex_literal::hex;
-    use super::Auth;
+    use super::*;
 
     #[test]
-    fn test_ntlm_hash() {
+    fn ntlm_hash() {
         let auth = Auth::new("user", "DOMAIN", "SecREt01");
         let hash = auth.ntlm_hash();
 
@@ -82,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ntlmv2_hash() {
+    fn ntlmv2_hash() {
         let auth = Auth::new("user", "DOMAIN", "SecREt01");
         let hash = auth.ntlmv2_hash();
 
@@ -91,17 +92,17 @@ mod tests {
 
     /*
     #[test]
-    fn test_challenge_response() {
+    fn challenge_response() {
         use crate::ntlm::NTLM;
 
-        let msg_challenge = hex!("4e544c4d53535000020000000c000c003000000001028100"
-                                 "0123456789abcdef0000000000000000620062003c000000"
-                                 "44004f004d00410049004e0002000c0044004f004d004100"
-                                 "49004e0001000c0053004500520056004500520004001400"
-                                 "64006f006d00610069006e002e0063006f006d0003002200"
-                                 "7300650072007600650072002e0064006f006d0061006900"
-                                 "6e002e0063006f006d0000000000");
-
+        let msg_challenge = Bytes::from(hex!(
+                "4e544c4d53535000020000000c000c003000000001028100"
+                "0123456789abcdef0000000000000000620062003c000000"
+                "44004f004d00410049004e0002000c0044004f004d004100"
+                "49004e0001000c0053004500520056004500520004001400"
+                "64006f006d00610069006e002e0063006f006d0003002200"
+                "7300650072007600650072002e0064006f006d0061006900"
+                "6e002e0063006f006d0000000000").as_ref());
 
         let mut ntlm = NTLM::new();
         ntlm.parse_challenge_msg(&msg_challenge)

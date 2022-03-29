@@ -1,6 +1,6 @@
 use std::io;
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use bytes::{Bytes, Buf, BytesMut, BufMut};
 
 use super::Error;
 
@@ -11,35 +11,34 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub fn read(stream: &mut impl io::Read) -> Result<Self, Error> {
-        let length = stream.read_u16::<LittleEndian>()? as usize;
-        let capacity = stream.read_u16::<LittleEndian>()? as usize;
-        let position = stream.read_u32::<LittleEndian>()? as usize;
+    pub fn parse(buffer: &mut Bytes) -> Result<Self, Error> {
+        let length = buffer.get_u16_le() as usize;
+        let capacity = buffer.get_u16_le() as usize;
+        let position = buffer.get_u32_le() as usize;
 
         let buffer = Buffer { length, capacity, position };
 
         Ok(buffer)
     }
 
-    pub fn write(&self, stream: &mut impl io::Write, offset: usize) -> Result<(), Error> {
+    pub fn write(&self, buffer: &mut BytesMut, offset: usize) -> Result<(), Error> {
         let position = offset + self.position;
 
-        stream.write_u16::<LittleEndian>(self.length.try_into()?)?;
-        stream.write_u16::<LittleEndian>(self.capacity.try_into()?)?;
-        stream.write_u32::<LittleEndian>(position.try_into()?)?;
+        buffer.put_u16_le(self.length.try_into()?);
+        buffer.put_u16_le(self.capacity.try_into()?);
+        buffer.put_u32_le(position.try_into()?);
         Ok(())
     }
 
-    pub fn extract<'a>(&self, data: &'a [u8]) -> Result<&'a [u8], Error> {
+    pub fn extract(&self, buffer: &Bytes) -> Bytes {
         let a = self.position;
         let b = a + self.length;
 
-        data.get(a..b)
-            .ok_or(Error::InvalidPacket)
+        buffer.slice(a..b)
     }
 
-    pub fn extract_string(&self, data: &[u8], unicode: bool) -> Result<String, Error> {
-        let raw = self.extract(data)?;
+    pub fn extract_string(&self, buffer: &Bytes, unicode: bool) -> Result<String, Error> {
+        let raw = self.extract(buffer);
 
         if unicode {
             let n = self.length;
@@ -53,7 +52,7 @@ impl Buffer {
         } else {
             // just treat as utf8, i know this is not exactly correct since
             // it might use non-ascii characters from DOS codepage.
-            String::from_utf8(Vec::from(raw)).map_err(|_| Error::InvalidPacket)
+            String::from_utf8(Vec::from(&raw[..])).map_err(|_| Error::InvalidPacket)
         }
     }
 }

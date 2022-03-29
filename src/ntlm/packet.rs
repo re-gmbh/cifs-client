@@ -1,4 +1,4 @@
-use std::io;
+use bytes::{BytesMut, BufMut, Buf};
 
 use super::buffer::Buffer;
 use super::Error;
@@ -16,7 +16,6 @@ impl PacketEntry {
         }
     }
 }
-
 
 pub struct Packet {
     entries: Vec<PacketEntry>,
@@ -52,17 +51,21 @@ impl Packet {
         self.extra.extend_from_slice(data);
     }
 
-    pub fn write(&self, stream: &mut impl io::Write) -> Result<(), Error> {
+    pub fn write(&self, out: &mut BytesMut) -> Result<(), Error> {
         let offset = self.base_len();
+
+        if out.remaining_mut() < offset + self.extra.len() {
+            return Err(Error::InputParameter("NTLM packet too big for output buffer".to_owned()));
+        }
 
         for entry in &self.entries {
             match entry {
-                PacketEntry::Binary(data) => stream.write_all(data.as_ref())?,
-                PacketEntry::Buffer(buffer) => buffer.write(stream, offset)?,
+                PacketEntry::Binary(data) => out.put(data.as_ref()),
+                PacketEntry::Buffer(buffer) => buffer.write(out, offset)?,
             }
         }
 
-        stream.write_all(self.extra.as_ref())?;
+        out.put(self.extra.as_ref());
         Ok(())
     }
 
