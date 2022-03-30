@@ -3,7 +3,7 @@ use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use bytes::{Bytes, BytesMut, BufMut};
 
 use crate::{Error, Auth};
-use crate::smb;
+use crate::smb::{Info, msg, reply};
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
 
@@ -24,48 +24,46 @@ impl Cifs {
 
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let setup = self.negotiate().await?;
+        let _setup = self.negotiate().await?;
 
         Ok(())
     }
 
 
-    pub async fn negotiate(&mut self) -> Result<smb::reply::ServerSetup, Error> {
-        let msg = smb::SmbMsg {
-            info: smb::Info::default(),
-            msg: smb::Msg::Negotiate,
-        };
+    pub async fn negotiate(&mut self) -> Result<reply::Negotiate, Error> {
+        let msg = msg::Negotiate {};
+        let (_, response) = self.cmd(msg).await?;
 
-        let response_msg = self.cmd(msg).await?;
+        Ok(response)
+    }
 
-        let setup = match &response_msg.replies[0] {
-            smb::Reply::Negotiate(setup) => setup.clone(),
-            _ => return Err(Error::UnexpectedReply),
-        };
-
-        Ok(setup)
+    pub async fn session_setup(&mut self, msg: msg::SessionSetup)
+        -> Result<(Info, reply::SessionSetup), Error>
+    {
+        self.cmd(msg)
+            .await
+            .map_err(|e| e.into())
     }
 
 
-    async fn cmd(&mut self, msg: smb::SmbMsg) -> Result<smb::SmbReply, Error> {
+    /*
+    async fn cmd<T: smb::Reply>(&mut self, msg: impl smb::Msg)
+        -> Result<(smb::Info, T), Error>
+    */
+    async fn cmd<M,R>(&mut self, msg: M) -> Result<(Info, R), Error>
+    where
+        M: msg::Msg,
+        R: reply::Reply,
+    {
+        self.write_frame(msg.package()?)
+            .await?;
 
-        let mut buffer = BytesMut::with_capacity(MAX_FRAME_LENGTH);
-        msg.write(&mut buffer)?;
-        self.write_frame(&buffer[..]).await?;
+        let (info, reply) = reply::parse(self.read_frame().await?)?;
 
-        let raw_response = self.read_frame().await?;
-
-        let reply = smb::SmbReply::parse(raw_response)?;
-
-        // at the moment we support only a single response (i.e. no AndX)
-        if reply.replies.len() != 1 {
-            return Err(Error::TooManyReplies(reply.replies.len()));
-        }
-
-        Ok(reply)
+        Ok((info, reply))
     }
 
-    async fn write_frame(&mut self, msg: &[u8]) -> Result<(), Error> {
+    async fn write_frame(&mut self, msg: Bytes) -> Result<(), Error> {
         if msg.len() > MAX_FRAME_LENGTH {
             return Err(Error::InputParam("message too long for frame".to_owned()));
         }
@@ -73,7 +71,7 @@ impl Cifs {
 
         self.stream.write_u8(0).await?;
         self.stream.write_all(&n.to_be_bytes()[1..4]).await?;
-        self.stream.write_all(msg).await?;
+        self.stream.write_all(&msg[..]).await?;
 
         Ok(())
     }

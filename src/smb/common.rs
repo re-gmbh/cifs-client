@@ -22,6 +22,8 @@ pub enum Error {
     NoDialect,
     ReplyExpected,
     NeedSecurityExt,
+    CreatePackage(String),
+    UnexpectedReply(RawCmd, RawCmd),
     Unsupported(String),
 }
 
@@ -34,6 +36,8 @@ impl fmt::Display for Error {
             Error::NoDialect => write!(f, "no supported dialect found"),
             Error::ReplyExpected => write!(f, "reply expected, but got command"),
             Error::NeedSecurityExt => write!(f, "need security extension"),
+            Error::CreatePackage(whatnow) => write!(f, "error creating package: {}", whatnow),
+            Error::UnexpectedReply(want,got) => write!(f, "unexpected reply, want: {:?}, got: {:?}", want, got),
             Error::Unsupported(what) => write!(f, "unsupported feature: {}", what),
         }
     }
@@ -162,22 +166,6 @@ pub enum RawCmd {
 }
 
 
-
-impl RawCmd {
-    pub fn has_andx(&self) -> bool {
-        match self {
-            RawCmd::Close => false,
-            RawCmd::Read => true,
-            RawCmd::Transaction2 => false,
-            RawCmd::Negotiate => false,
-            RawCmd::SessionSetup => true,
-            RawCmd::TreeConnect => true,
-            RawCmd::NoCommand => false,
-        }
-    }
-}
-
-
 /// Info is the information from SMB header
 #[derive(Debug)]
 pub struct Info {
@@ -237,7 +225,7 @@ impl Info {
         Ok(info)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(&self, buffer: &mut BytesMut) {
         let pid_high = (self.pid >> 16) as u16;
         let pid_low = (self.pid & 0xffff) as u16;
 
@@ -251,8 +239,6 @@ impl Info {
         buffer.put_u16_le(pid_low);
         buffer.put_u16_le(self.uid);
         buffer.put_u16_le(self.mid);
-
-        Ok(())
     }
 }
 
@@ -281,10 +267,9 @@ impl AndX {
         }
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(&self, buffer: &mut BytesMut) {
         buffer.put_u8(self.cmd as u8);
         buffer.put_u8(0);
         buffer.put_u16_le(self.offset);
-        Ok(())
     }
 }

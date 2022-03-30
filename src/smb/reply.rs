@@ -2,9 +2,32 @@ use bytes::{Bytes, Buf};
 
 use super::common::*;
 
+pub trait Reply: Sized {
+    const CMD: RawCmd;
+    const ANDX: bool;
 
-#[derive(Debug, Clone)]
-pub struct ServerSetup {
+    fn parse_param(info: &Info, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
+
+    fn parse(info: &Info, buffer: &mut Bytes) -> Result<Self, Error> {
+        let parameter_count = buffer.get_u8() as usize;
+        let mut parameter = buffer.copy_to_bytes(2*parameter_count);
+
+        let data_count = buffer.get_u16_le() as usize;
+        let data = buffer.copy_to_bytes(data_count);
+
+        // first parameter is AndX structure, if this command has one
+        if Self::ANDX {
+            if AndX::parse(&mut parameter)?.is_some() {
+                return Err(Error::Unsupported("AndX chaining is currently not supported".to_owned()));
+            }
+        }
+
+        Self::parse_param(info, parameter, data)
+    }
+}
+
+#[derive(Debug)]
+pub struct Negotiate {
     pub dialect: &'static str,
     pub security_mode: u8,
     pub max_mpx_count: u16,
@@ -16,48 +39,16 @@ pub struct ServerSetup {
     pub system_time: u64,
     pub timezone: u16,
     pub challenge_length: u8,
-    pub server_guid: [u8; 16],
+    pub server_guid: Bytes,
 }
 
+impl Reply for Negotiate {
+    const CMD: RawCmd = RawCmd::Negotiate;
+    const ANDX: bool = false;
 
-
-#[derive(Debug)]
-pub enum Reply {
-    Negotiate(ServerSetup),
-
-    SessionSetup {
-        guest_mode: bool,
-        security_blob: Bytes,
-    },
-
-}
-
-impl Reply {
-    fn parse(cmd: RawCmd, info: &Info, andx: &mut Option<AndX>, buffer: &mut Bytes) -> Result<Self, Error> {
-        let parameter_count = buffer.get_u8() as usize;
-        let mut parameter = buffer.copy_to_bytes(2*parameter_count);
-
-        let data_count = buffer.get_u16_le() as usize;
-        let data = buffer.copy_to_bytes(data_count);
-
-        // first parameter is AndX structure, if this command has one
-        if cmd.has_andx() {
-            *andx = AndX::parse(&mut parameter)?;
-        } else {
-            *andx = None;
-        }
-
-        match cmd {
-            RawCmd::Negotiate => Reply::parse_negotiate(parameter, data),
-            RawCmd::SessionSetup => Reply::parse_session_setup(info, parameter, data),
-
-            _ => Err(Error::InvalidCommand(cmd as u8)),
-        }
-    }
-
-
-    /// parse negotiate reply, this is the version for Flags2::EXTENDED_SECURITY
-    fn parse_negotiate(mut parameter: Bytes, mut data: Bytes) -> Result<Self, Error> {
+    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+        -> Result<Self, Error>
+    {
         // strictly there may only be one word, but we only support dialects above
         // NTLM 0.12 and therefor need at least 17 words.
         if parameter.len() < 17 {
@@ -92,12 +83,10 @@ impl Reply {
             return Err(Error::InvalidData);
         }
 
-        let mut server_guid = [0u8; 16];
-        data.copy_to_slice(&mut server_guid);
+        let server_guid = data.copy_to_bytes(16);
 
 
-
-        let server_setup = ServerSetup {
+        let reply = Negotiate {
             dialect,
             security_mode,
             max_mpx_count,
@@ -112,11 +101,25 @@ impl Reply {
             server_guid,
         };
 
-
-        Ok(Reply::Negotiate(server_setup))
+        Ok(reply)
     }
+}
 
-    fn parse_session_setup(info: &Info, mut parameter: Bytes, mut data: Bytes) -> Result<Self, Error> {
+
+/// SessionSetup is used for challenge-response authentication
+#[derive(Debug)]
+pub struct SessionSetup {
+    guest_mode: bool,
+    security_blob: Bytes,
+}
+
+impl Reply for SessionSetup {
+    const CMD: RawCmd = RawCmd::SessionSetup;
+    const ANDX: bool = true;
+
+    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+        -> Result<Self, Error>
+    {
         // parse parameter
         let action = parameter.get_u16_le();
         let blob_length = parameter.get_u16_le() as usize;
@@ -129,7 +132,7 @@ impl Reply {
         //let lanman = read_unicode_str0(&mut data);
 
         // build reply
-        let reply = Reply::SessionSetup {
+        let reply = SessionSetup {
             guest_mode: action & 0x0001 == 1,
             security_blob: blob,
         };
@@ -140,65 +143,50 @@ impl Reply {
 
 
 
-#[derive(Debug)]
-pub struct SmbReply {
-    pub info: Info,
-    pub replies: Vec<Reply>,
-}
 
-
-impl SmbReply {
-    pub fn parse(buffer: Bytes) -> Result<Self, Error> {
-        let mut parse = buffer.clone();
-
-        // check if we have at least our SMB header?
-        if parse.remaining() < SMB_HEADER_LEN {
-            return Err(Error::InvalidHeader);
-        }
-
-        // check magic
-        let magic = parse.copy_to_bytes(4);
-        if &magic[..] != SMB_MAGIC {
-            return Err(Error::InvalidHeader);
-        }
-
-        // check command identifier
-        let cmd: RawCmd = parse.get_u8().try_into()?;
-
-        // info part of header
-        let info = Info::parse(&mut parse)?;
-
-        // this must be a reply
-        if !info.flags1.contains(Flags1::REPLY) {
-            return Err(Error::ReplyExpected);
-        }
-
-
-        // if extended_security is not set, we have to parse
-        // negotiate reply differently... until we support that
-        // throw an error
-        if !info.flags2.contains(Flags2::EXTENDED_SECURITY) {
-            return Err(Error::NeedSecurityExt);
-        }
-
-
-        //
-        // now parse replies
-        //
-        let mut replies = Vec::new();
-        let mut maybe_andx: Option<AndX> = None;
-
-        let reply = Reply::parse(cmd, &info, &mut maybe_andx, &mut parse)?;
-        replies.push(reply);
-
-        while let Some(ref andx) = maybe_andx {
-            let mut parse = buffer.slice((andx.offset as usize)..);
-            let reply = Reply::parse(andx.cmd, &info, &mut maybe_andx, &mut parse)?;
-            replies.push(reply);
-        }
-
-        Ok(SmbReply { info, replies })
+/// Parse buffer into a specific reply. This is our normal use case, because
+/// after sending a command we expect a response to this specific command.
+///
+/// On the other hand CIFS is free to send any response it likes (ie out of order,
+/// or multiple responses chained together, ...), so this is not the most robust
+/// approach.
+pub fn parse<T: Reply>(mut buffer: Bytes) -> Result<(Info, T), Error> {
+    // check if we have at least our SMB header?
+    if buffer.remaining() < SMB_HEADER_LEN {
+        return Err(Error::InvalidHeader);
     }
+
+    // check magic
+    let magic = buffer.copy_to_bytes(4);
+    if &magic[..] != SMB_MAGIC {
+        return Err(Error::InvalidHeader);
+    }
+
+    // check command identifier
+    let cmd: RawCmd = buffer.get_u8().try_into()?;
+    if cmd != T::CMD {
+        return Err(Error::UnexpectedReply(T::CMD, cmd));
+    }
+
+    // info part of header
+    let info = Info::parse(&mut buffer)?;
+
+    // this must be a reply
+    if !info.flags1.contains(Flags1::REPLY) {
+        return Err(Error::ReplyExpected);
+    }
+
+    // if extended_security is not set, we have to parse
+    // negotiate reply differently... until we support that
+    // throw an error
+    if !info.flags2.contains(Flags2::EXTENDED_SECURITY) {
+        return Err(Error::NeedSecurityExt);
+    }
+
+    // finally parse the expected package
+    let reply = T::parse(&info, &mut buffer)?;
+
+    Ok((info, reply))
 }
 
 
@@ -208,66 +196,59 @@ mod tests {
     use hex_literal::hex;
     use super::*;
 
-
     #[test]
     fn parse_negotiate_cmd() {
         let blob = hex!("ff534d4272000000009853c8000000000000000000000000fffffffe00000000"
                         "1100000310000100041100000000010000000000fde300808e6db6b79b3ed801"
                         "0000001000f9fe3c88bf27b444bd3d74f7b2fdbf01");
         let buffer = BytesMut::from(&blob[..]).freeze();
-        let smb = SmbReply::parse(buffer).expect("can't parse SMB blob");
+
+        let (info,reply) = parse::<Negotiate>(buffer).expect("can't parse SMB blob");
 
         // check header infos
-        assert_eq!(smb.info.status, 0);
-        assert_eq!(smb.info.flags1, Flags1::REPLY
-                                | Flags1::CASE_INSENSITIVE
-                                | Flags1::CANONICAL_PATHS);
+        assert_eq!(info.status, 0);
+        assert_eq!(info.flags1, Flags1::REPLY
+                              | Flags1::CASE_INSENSITIVE
+                              | Flags1::CANONICAL_PATHS);
 
-        assert_eq!(smb.info.flags2, Flags2::UNICODE
-                                | Flags2::NTSTATUS
-                                | Flags2::EXTENDED_SECURITY
-                                | Flags2::LONG_NAMES_USED
-                                | Flags2::SIGNATURE_REQUIRED
-                                | Flags2::EAS
-                                | Flags2::LONG_NAMES_ALLOWED);
+        assert_eq!(info.flags2, Flags2::UNICODE
+                              | Flags2::NTSTATUS
+                              | Flags2::EXTENDED_SECURITY
+                              | Flags2::LONG_NAMES_USED
+                              | Flags2::SIGNATURE_REQUIRED
+                              | Flags2::EAS
+                              | Flags2::LONG_NAMES_ALLOWED);
 
-        assert_eq!(smb.info.pid, 65279);
-        assert_eq!(smb.info.tid, 0xffff);
-        assert_eq!(smb.info.uid, 0);
-        assert_eq!(smb.info.mid, 0);
+        assert_eq!(info.pid, 65279);
+        assert_eq!(info.tid, 0xffff);
+        assert_eq!(info.uid, 0);
+        assert_eq!(info.mid, 0);
 
         // check reply
-        assert_eq!(smb.replies.len(), 1);
-        match &smb.replies[0] {
-            Reply::Negotiate(setup)  => {
-                assert_eq!(setup.dialect, "NT LM 0.12");
-                assert_eq!(setup.security_mode, 3);
-                assert_eq!(setup.max_mpx_count, 16);
-                assert_eq!(setup.max_number_vcs, 1);
-                assert_eq!(setup.max_buffer_size, 4356);
-                assert_eq!(setup.session_key, 0);
-                assert_eq!(setup.capabilities, Capabilities::EXTENDED_SECURITY
-                                             | Capabilities::INFOLEVEL_PASS
-                                             | Capabilities::LARGE_READX
-                                             | Capabilities::LARGE_WRITEX
-                                             | Capabilities::NT_FIND
-                                             | Capabilities::LOCK_AND_READ
-                                             | Capabilities::LEVEL2_OPLOCKS
-                                             | Capabilities::NTSTATUS
-                                             | Capabilities::REMOTE_APIS
-                                             | Capabilities::NT_SMBS
-                                             | Capabilities::LARGE_FILES
-                                             | Capabilities::UNICODE
-                                             | Capabilities::RAW_MODE);
+        assert_eq!(reply.dialect, "NT LM 0.12");
+        assert_eq!(reply.security_mode, 3);
+        assert_eq!(reply.max_mpx_count, 16);
+        assert_eq!(reply.max_number_vcs, 1);
+        assert_eq!(reply.max_buffer_size, 4356);
+        assert_eq!(reply.session_key, 0);
+        assert_eq!(reply.capabilities, Capabilities::EXTENDED_SECURITY
+                                     | Capabilities::INFOLEVEL_PASS
+                                     | Capabilities::LARGE_READX
+                                     | Capabilities::LARGE_WRITEX
+                                     | Capabilities::NT_FIND
+                                     | Capabilities::LOCK_AND_READ
+                                     | Capabilities::LEVEL2_OPLOCKS
+                                     | Capabilities::NTSTATUS
+                                     | Capabilities::REMOTE_APIS
+                                     | Capabilities::NT_SMBS
+                                     | Capabilities::LARGE_FILES
+                                     | Capabilities::UNICODE
+                                     | Capabilities::RAW_MODE);
 
-                assert_eq!(setup.system_time, 0x01d83e9bb7b66d8e);// FIXME implement windows time type
-                assert_eq!(setup.timezone, 0);
-                assert_eq!(setup.challenge_length, 0);
-                assert_eq!(setup.server_guid, hex!("f9fe3c88bf27b444bd3d74f7b2fdbf01"));
-            }
-
-            _ => panic!("unexpected reply type"),
-        }
+        assert_eq!(reply.system_time, 0x01d83e9bb7b66d8e);// FIXME implement windows time type
+        assert_eq!(reply.timezone, 0);
+        assert_eq!(reply.challenge_length, 0);
+        assert_eq!(&reply.server_guid[..], hex!("f9fe3c88bf27b444bd3d74f7b2fdbf01"));
     }
 
     #[test]
@@ -286,27 +267,19 @@ mod tests {
                         "73002000320030003000300020004c0041004e0020004d00"
                         "61006e00610067006500720000");
 
-        let expected_ntlm_blob =
-            hex!("4e544c4d5353500002000000140014003800000015828ae2d9102a72"
-                 "d8b439d200000000000000006c006c004c0000000501280a0000000f"
-                 "4b0049004500460045004c002d00490050004300020014004b004900"
-                 "4500460045004c002d00490050004300010014004b00490045004600"
-                 "45004c002d00490050004300040014004b0049004500460045004c00"
-                 "2d00490050004300030014004b0049004500460045004c002d004900"
-                 "50004300060004000100000000000000");
 
         let buffer = BytesMut::from(&blob[..]).freeze();
-        let smb = SmbReply::parse(buffer).expect("can't parse SMB blob");
 
-        assert_eq!(smb.replies.len(), 1);
+        let (_,reply) = parse::<SessionSetup>(buffer).expect("can't parse SMB blob");
 
-        match &smb.replies[0] {
-            Reply::SessionSetup { guest_mode, security_blob }  => {
-                assert_eq!(*guest_mode, false);
-                assert_eq!(&security_blob[..], expected_ntlm_blob);
-            }
-
-            _ => panic!("expected session setup reply"),
-        }
+        assert_eq!(reply.guest_mode, false);
+        assert_eq!(&reply.security_blob[..], hex!(
+            "4e544c4d5353500002000000140014003800000015828ae2d9102a72"
+            "d8b439d200000000000000006c006c004c0000000501280a0000000f"
+            "4b0049004500460045004c002d00490050004300020014004b004900"
+            "4500460045004c002d00490050004300010014004b00490045004600"
+            "45004c002d00490050004300040014004b0049004500460045004c00"
+            "2d00490050004300030014004b0049004500460045004c002d004900"
+            "50004300060004000100000000000000"));
     }
 }
