@@ -3,7 +3,7 @@ use bytes::{Bytes, Buf};
 use super::common::*;
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServerSetup {
     pub dialect: &'static str,
     pub security_mode: u8,
@@ -51,7 +51,7 @@ impl Reply {
             RawCmd::Negotiate => Reply::parse_negotiate(parameter, data),
             RawCmd::SessionSetup => Reply::parse_session_setup(info, parameter, data),
 
-            _ => Err(Error::Unsupported),
+            _ => Err(Error::InvalidCommand(cmd as u8)),
         }
     }
 
@@ -61,16 +61,16 @@ impl Reply {
         // strictly there may only be one word, but we only support dialects above
         // NTLM 0.12 and therefor need at least 17 words.
         if parameter.len() < 17 {
-            return Err(Error::Unsupported);
+            return Err(Error::Unsupported("negotiate header with too few parameter".to_owned()));
         }
 
         // this must always be here (0xffff means no supported dialects)
         let index = parameter.get_u16_le() as usize;
         if index == 0xffff {
-            return Err(Error::InvalidDialect);
+            return Err(Error::NoDialect);
         }
         let dialect = SMB_SUPPORTED_DIALECTS.get(index)
-                                            .ok_or(Error::InvalidDialect)?;
+                                            .ok_or(Error::InvalidHeader)?;
 
 
         let security_mode = parameter.get_u8();
@@ -141,14 +141,14 @@ impl Reply {
 
 
 #[derive(Debug)]
-pub struct SMBReply {
+pub struct SmbReply {
     pub info: Info,
     pub replies: Vec<Reply>,
 }
 
 
-impl SMBReply {
-    fn parse(buffer: Bytes) -> Result<Self, Error> {
+impl SmbReply {
+    pub fn parse(buffer: Bytes) -> Result<Self, Error> {
         let mut parse = buffer.clone();
 
         // check if we have at least our SMB header?
@@ -178,13 +178,13 @@ impl SMBReply {
         // negotiate reply differently... until we support that
         // throw an error
         if !info.flags2.contains(Flags2::EXTENDED_SECURITY) {
-            return Err(Error::NeedExtSec);
+            return Err(Error::NeedSecurityExt);
         }
 
 
         //
         // now parse replies
-        // 
+        //
         let mut replies = Vec::new();
         let mut maybe_andx: Option<AndX> = None;
 
@@ -197,7 +197,7 @@ impl SMBReply {
             replies.push(reply);
         }
 
-        Ok(SMBReply { info, replies })
+        Ok(SmbReply { info, replies })
     }
 }
 
@@ -215,7 +215,7 @@ mod tests {
                         "1100000310000100041100000000010000000000fde300808e6db6b79b3ed801"
                         "0000001000f9fe3c88bf27b444bd3d74f7b2fdbf01");
         let buffer = BytesMut::from(&blob[..]).freeze();
-        let smb = SMBReply::parse(buffer).expect("can't parse SMB blob");
+        let smb = SmbReply::parse(buffer).expect("can't parse SMB blob");
 
         // check header infos
         assert_eq!(smb.info.status, 0);
@@ -296,7 +296,7 @@ mod tests {
                  "50004300060004000100000000000000");
 
         let buffer = BytesMut::from(&blob[..]).freeze();
-        let smb = SMBReply::parse(buffer).expect("can't parse SMB blob");
+        let smb = SmbReply::parse(buffer).expect("can't parse SMB blob");
 
         assert_eq!(smb.replies.len(), 1);
 

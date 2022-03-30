@@ -80,13 +80,13 @@ impl Msg {
 
 
 #[derive(Debug)]
-pub struct SMBMsg {
+pub struct SmbMsg {
     pub info: Info,
     pub msg: Msg,
 }
 
-impl SMBMsg {
-    fn write(&self, buffer: &mut BytesMut) -> Result<(), Error> {
+impl SmbMsg {
+    pub fn write(&self, buffer: &mut BytesMut) -> Result<(), Error> {
         buffer.put(&SMB_MAGIC[..]);
         buffer.put_u8(self.msg.get_raw_cmd() as u8);
 
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn create_negotiate() {
-        let smb_msg = SMBMsg {
+        let smb_msg = SmbMsg {
             info: Info::default(),
             msg: Msg::Negotiate,
         };
@@ -142,7 +142,7 @@ mod tests {
             security_blob: security_blob.to_vec(),
         };
 
-        let smb_msg = SMBMsg {
+        let smb_msg = SmbMsg {
             info: Info::default(),
             msg: Msg::SessionSetup(setup_data),
         };

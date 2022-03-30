@@ -1,3 +1,4 @@
+use std::fmt;
 use std::num::TryFromIntError;
 use std::string::FromUtf8Error;
 
@@ -15,13 +16,27 @@ pub const SMB_SUPPORTED_DIALECTS: &[&str] = &["NT LM 0.12"];
 
 #[derive(Debug)]
 pub enum Error {
-    InvalidData,
     InvalidHeader,
+    InvalidData,
     InvalidCommand(u8),
-    InvalidDialect,
+    NoDialect,
     ReplyExpected,
-    NeedExtSec,
-    Unsupported,
+    NeedSecurityExt,
+    Unsupported(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::InvalidHeader => write!(f, "invalid header"),
+            Error::InvalidData => write!(f, "invalid data"),
+            Error::InvalidCommand(cmd) => write!(f, "invalid command: {:02x}", cmd),
+            Error::NoDialect => write!(f, "no supported dialect found"),
+            Error::ReplyExpected => write!(f, "reply expected, but got command"),
+            Error::NeedSecurityExt => write!(f, "need security extension"),
+            Error::Unsupported(what) => write!(f, "unsupported feature: {}", what),
+        }
+    }
 }
 
 impl From<TryFromPrimitiveError<RawCmd>> for Error {
