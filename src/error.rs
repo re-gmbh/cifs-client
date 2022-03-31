@@ -21,7 +21,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::IoError(what) => write!(f, "io error: {}", what),
-            Error::SMBError(err) => write!(f, "SMB error: {}", err),
+            Error::SMBError(err) => write!(f, "protocol error: {}", err),
             Error::NTLMError(err) => write!(f, "NTLM error: {}", err),
             Error::InputParam(what) => write!(f, "invalid input value: {}", what),
             Error::InvalidFrameType(v) => write!(f, "invalid NetBIOS message type: {:02x}", v),

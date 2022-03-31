@@ -1,4 +1,4 @@
-use bytes::{BytesMut, BufMut};
+use bytes::{Bytes, BytesMut, BufMut};
 
 use super::buffer::Buffer;
 use super::Error;
@@ -52,22 +52,34 @@ impl Packet {
         self.extra.extend_from_slice(data);
     }
 
-    pub fn write(&self, out: &mut BytesMut) -> Result<(), Error> {
-        let offset = self.base_len();
+    pub fn append_string(&mut self, msg: &str, unicode: bool) {
+        if unicode {
+            let encoded: Vec<u8> = msg
+                .encode_utf16()
+                .map(|c| c.to_le_bytes())
+                .flatten()
+                .collect();
 
-        if out.remaining_mut() < offset + self.extra.len() {
-            return Err(Error::InputParameter("NTLM packet too big for output buffer".to_owned()));
+            self.append_buffer(&encoded);
+        } else {
+            self.append_buffer(msg.as_bytes());
         }
+    }
+
+    pub fn to_bytes(&self) -> Result<Bytes, Error> {
+        let offset = self.base_len();
+        let mut out = BytesMut::with_capacity(offset + self.extra.len());
 
         for entry in &self.entries {
             match entry {
                 PacketEntry::Binary(data) => out.put(data.as_ref()),
-                PacketEntry::Buffer(buffer) => buffer.write(out, offset)?,
+                PacketEntry::Buffer(buffer) => buffer.write(&mut out, offset)?,
             }
         }
 
         out.put(self.extra.as_ref());
-        Ok(())
+
+        Ok(out.freeze())
     }
 
     fn base_len(&self) -> usize {

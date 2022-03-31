@@ -38,11 +38,13 @@ pub fn md4_oneshot(data: &[u8]) -> [u8; 16] {
 }
 
 
+
 enum ParseStrError {
     MissingTermination,
     InvalidUnicode,
 }
 
+#[allow(dead_code)]
 fn parse_str0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
     let mut data = Vec::new();
 

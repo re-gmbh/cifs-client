@@ -94,9 +94,29 @@ pub struct SessionSetup {
     pub vc_number: u16,
     pub session_key: u32,
     pub capabilities: Capabilities,
-    pub security_blob: Vec<u8>,
+    pub security_blob: Bytes,
     //pub os_name: String,
     //pub lanman: String;
+}
+
+impl SessionSetup {
+    pub fn new(auth_blob: Bytes) -> Self {
+        let caps = Capabilities::UNICODE
+                 | Capabilities::LARGE_FILES
+                 | Capabilities::NT_SMBS
+                 | Capabilities::NTSTATUS
+                 | Capabilities::EXTENDED_SECURITY;
+
+
+        SessionSetup {
+            max_buffer_size: 4356,
+            max_mpx_count: 0,
+            vc_number: 0,
+            session_key: 0,
+            capabilities: caps,
+            security_blob: auth_blob,
+        }
+    }
 }
 
 impl Msg for SessionSetup {
@@ -109,7 +129,6 @@ impl Msg for SessionSetup {
                                 .len()
                                 .try_into()
                                 .expect("security_blob in SessionSetup is to big");
-
         // parameter
         parameter.put_u16_le(self.max_buffer_size);
         parameter.put_u16_le(self.max_mpx_count);
@@ -120,12 +139,13 @@ impl Msg for SessionSetup {
         parameter.put_u32_le(self.capabilities.bits());
 
         // data
-        data.put(self.security_blob.as_slice());
+        data.put(self.security_blob.as_ref());
         data.put_u8(0);     // pad
         data.put_u16_le(0); // os_name: just zero-terminatation
         data.put_u16_le(0); // lanman: just zero-terminatation
     }
 }
+
 
 
 
@@ -148,9 +168,9 @@ mod tests {
 
     #[test]
     fn create_session_setup() {
-        let security_blob = hex!(
+        let security_blob = Bytes::from(hex!(
             "4e544c4d5353500001000000978208e200000000000000000000000000000000"
-            "0a00614a0000000f");
+            "0a00614a0000000f").as_ref());
 
         let msg = SessionSetup {
             max_buffer_size: 4356,
@@ -158,7 +178,7 @@ mod tests {
             vc_number: 0,
             session_key: 0,
             capabilities: Capabilities::default(),
-            security_blob: security_blob.to_vec(),
+            security_blob: security_blob,
         };
 
         let package = msg.package()

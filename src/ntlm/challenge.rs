@@ -1,4 +1,4 @@
-use bytes::{Bytes, Buf, BytesMut};
+use bytes::{Bytes, Buf};
 
 use super::buffer::Buffer;
 use super::packet::Packet;
@@ -33,7 +33,7 @@ impl ChallengeMsg {
         let target_buffer = Buffer::parse(&mut parse)?;
         let flags = Flags::from_bits_truncate(parse.get_u32_le());
 
-        // extract 8 bytes challenge (this is what we are really after)
+        // extract 8 bytes challenge (the juicy center we are after)
         let challenge = parse.copy_to_bytes(8);
 
         // 8 bytes context, we ignore this
@@ -48,7 +48,7 @@ impl ChallengeMsg {
         Ok(ChallengeMsg { target, flags, challenge, info })
     }
 
-    pub fn response(&self, out: &mut BytesMut, auth: &Auth) -> Result<(), Error> {
+    pub fn response(&self, auth: &Auth) -> Result<Bytes, Error> {
         let (_sk, response) = auth.authenticate(self)?;
 
         let mut packet = Packet::new();
@@ -56,9 +56,11 @@ impl ChallengeMsg {
         packet.append_u32(NTLM_MSG_RESPONSE);
         packet.append_buffer(&[0u8; 24]);                   // Empty LM Response
         packet.append_buffer(&response);                    // NTLMv2 Response
-        packet.append_buffer(auth.domain.as_bytes());
-        packet.append_buffer(auth.user.as_bytes());
-        packet.append_buffer(auth.workstation.as_bytes());
+
+        let unicode = self.flags.contains(Flags::UNICODE);
+        packet.append_string(&auth.domain, unicode);
+        packet.append_string(&auth.user, unicode);
+        packet.append_string(&auth.workstation, unicode);
 
         // optional stuff
         //packet.append_buffer(&sk);
@@ -67,7 +69,7 @@ impl ChallengeMsg {
         //    packet.append_binary(version.as_bytes().as_ref());
         //}
 
-        packet.write(out)
+        packet.to_bytes()
     }
 }
 

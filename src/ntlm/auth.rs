@@ -6,6 +6,7 @@ use crate::utils;
 use super::{Error, ChallengeMsg};
 
 
+#[derive(Debug, Clone)]
 pub struct Auth {
     pub user: String,
     pub workstation: String,

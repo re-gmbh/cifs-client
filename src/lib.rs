@@ -1,7 +1,7 @@
 pub mod connection;
 pub mod error;
 pub mod ntlm;
-mod smb;
+pub mod smb;
 mod utils;
 
 // re-export important types directly in crate-root

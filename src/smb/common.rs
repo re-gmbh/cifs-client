@@ -24,6 +24,7 @@ pub enum Error {
     NeedSecurityExt,
     CreatePackage(String),
     UnexpectedReply(RawCmd, RawCmd),
+    ServerError(Status),
     Unsupported(String),
 }
 
@@ -38,6 +39,7 @@ impl fmt::Display for Error {
             Error::NeedSecurityExt => write!(f, "need security extension"),
             Error::CreatePackage(whatnow) => write!(f, "error creating package: {}", whatnow),
             Error::UnexpectedReply(want,got) => write!(f, "unexpected reply, want: {:?}, got: {:?}", want, got),
+            Error::ServerError(status) => write!(f, "server reports error: {}", status),
             Error::Unsupported(what) => write!(f, "unsupported feature: {}", what),
         }
     }
@@ -146,10 +148,92 @@ impl Capabilities {
 /// NTStatus is the status code reported in a SMB header.
 /// This would ideally be a C-enum of the following list:
 /// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-erref/596a1078-e883-4972-9bbc-49e60bebca55
-/// But since i'm not that crazy i plan to only defined values used in in ERRDOS table
-/// and translate them according to this table
-pub type NTStatus = u32;
+/// But since i'm not that crazy i define only the values from the SMB specification
+/// and treat the rest as "unknown".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[allow(non_camel_case_types)]
+#[repr(u32)]
+pub enum NTStatus {
+    SUCCESS                 = 0x00000000,
+    INVALID_SMB             = 0x00010002,
+    BAD_TID                 = 0x00050002,
+    BAD_COMMAND             = 0x00160002,
+    BAD_UID                 = 0x005b0002,
+    NON_STANDARD            = 0x00fb0002,
+    BUFFER_OVERFLOW         = 0x80000005,
+    NO_MORE_FILES           = 0x80000006,
+    STOPPED_ON_SYMLINK      = 0x8000002d,
+    NOT_IMPLEMENTED         = 0xc0000002,
+    INVALID_PARAMETER       = 0xc000000d,
+    NO_SUCH_DEVICE          = 0xc000000e,
+    INVALID_DEVICE_REQ      = 0xc0000010,
+    MORE_PROCESSING         = 0xc0000016,
+    ACCESS_DENIED           = 0xc0000022,
+    BUFFER_TOO_SMALL        = 0xc0000023,
+    NAME_NOT_FOUND          = 0xc0000034,
+    NAME_COLLISION          = 0xc0000035,
+    PATH_NOT_FOUND          = 0xc000003a,
+    LOGIN_FAILURE           = 0xc000006d,
+    BAD_IMPERSONATION       = 0xc00000a5,
+    IO_TIMEOUT              = 0xc00000b5,
+    FILE_IS_DIRECTORY       = 0xc00000ba,
+    NOT_SUPPORTED           = 0xc00000bb,
+    NETWORK_NAME_DELETED    = 0xc00000c9,
+    USER_SESSION_DELETED    = 0xc0000203,
+    NETWORK_SESSION_EXPIRED = 0xc000035c,
+    TOO_MANY_UIDS           = 0xc000205a,
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Known(NTStatus),
+    Unknown(u32),
+}
+
+impl From<u32> for Status {
+    fn from(code: u32) -> Self {
+        match code.try_into() {
+            Ok(status) => Status::Known(status),
+            Err(_) => Status::Unknown(code),
+        }
+    }
+}
+
+impl From<Status> for u32 {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Known(nt) => nt as u32,
+            Status::Unknown(x) => x,
+        }
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Status::Known(x) => write!(f, "{:?}", x),
+            Status::Unknown(x) => write!(f, "Unknown ({:02x})", x),
+        }
+    }
+}
+
+impl Status {
+    pub fn is_success(&self) -> bool {
+        *self == Status::Known(NTStatus::SUCCESS)
+    }
+
+    pub fn is_failure(&self) -> bool {
+        !self.is_success()
+    }
+
+    pub fn try_me(&self) -> Result<(), Error> {
+        if self.is_failure() {
+            Err(Error::ServerError(*self))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 
 /// RawCmd defines the command codes for SMB header and AndX structure
@@ -169,7 +253,7 @@ pub enum RawCmd {
 /// Info is the information from SMB header
 #[derive(Debug)]
 pub struct Info {
-    pub status: NTStatus,
+    pub status: Status,
     pub flags1: Flags1,
     pub flags2: Flags2,
     pub pid: u32,
@@ -183,7 +267,7 @@ impl Info {
         Info {
             flags1: Flags1::default(),
             flags2: Flags2::default(),
-            status: 0,
+            status: Status::Known(NTStatus::SUCCESS),
             pid: 0xfeff,        // 0xffff in pid_low is not allowed by spec
             tid: 0xffff,
             uid: 0,
@@ -196,8 +280,7 @@ impl Info {
             return Err(Error::InvalidHeader);
         }
 
-        let status = buffer.get_u32_le() as NTStatus;
-
+        let status = buffer.get_u32_le().into();
         let flags1 = Flags1::from_bits_truncate(buffer.get_u8());
         let flags2 = Flags2::from_bits_truncate(buffer.get_u16_le());
         let pid_high = buffer.get_u16_le();
@@ -229,7 +312,7 @@ impl Info {
         let pid_high = (self.pid >> 16) as u16;
         let pid_low = (self.pid & 0xffff) as u16;
 
-        buffer.put_u32_le(self.status as u32);
+        buffer.put_u32_le(self.status.into());
         buffer.put_u8(self.flags1.bits());
         buffer.put_u16_le(self.flags2.bits());
         buffer.put_u16_le(pid_high);

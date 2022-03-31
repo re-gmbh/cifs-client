@@ -109,8 +109,8 @@ impl Reply for Negotiate {
 /// SessionSetup is used for challenge-response authentication
 #[derive(Debug)]
 pub struct SessionSetup {
-    guest_mode: bool,
-    security_blob: Bytes,
+    pub guest_mode: bool,
+    pub security_blob: Bytes,
 }
 
 impl Reply for SessionSetup {
@@ -171,6 +171,14 @@ pub fn parse<T: Reply>(mut buffer: Bytes) -> Result<(Info, T), Error> {
     // info part of header
     let info = Info::parse(&mut buffer)?;
 
+    // check status
+    match info.status {
+        Status::Known(NTStatus::SUCCESS) => (),
+        Status::Known(NTStatus::MORE_PROCESSING) => (),
+
+        _ => return Err(Error::ServerError(info.status)),
+    }
+
     // this must be a reply
     if !info.flags1.contains(Flags1::REPLY) {
         return Err(Error::ReplyExpected);
@@ -206,7 +214,7 @@ mod tests {
         let (info,reply) = parse::<Negotiate>(buffer).expect("can't parse SMB blob");
 
         // check header infos
-        assert_eq!(info.status, 0);
+        assert_eq!(info.status, Status::Known(NTStatus::SUCCESS));
         assert_eq!(info.flags1, Flags1::REPLY
                               | Flags1::CASE_INSENSITIVE
                               | Flags1::CANONICAL_PATHS);

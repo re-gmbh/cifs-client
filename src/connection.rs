@@ -4,13 +4,15 @@ use bytes::{Bytes, BytesMut, BufMut};
 
 use crate::{Error, Auth};
 use crate::smb::{Info, msg, reply};
+use crate::ntlm;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
 
 
 pub struct Cifs {
-    pub auth: Auth,
+    auth: Auth,
     stream: TcpStream,
+    info: Info,
 }
 
 
@@ -19,59 +21,90 @@ impl Cifs {
         Cifs {
             auth,
             stream,
+            info: Info::default(),
         }
     }
 
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let _setup = self.negotiate().await?;
+        // TODO: should save server setup from negotiate
+        let _ = self.negotiate().await?;
 
-        Ok(())
+        let ntlm_init_blob = {
+            let mut ntlm_init = ntlm::InitMsg::new(
+                 ntlm::Flags::UNICODE
+               | ntlm::Flags::OEM
+               | ntlm::Flags::REQUEST_TARGET
+               | ntlm::Flags::NTLM
+               | ntlm::Flags::DOMAIN_SUPPLIED
+               | ntlm::Flags::WORKSTATION_SUPPLIED);
+
+            ntlm_init.set_origin(&self.auth.domain, &self.auth.workstation);
+            ntlm_init.set_default_version();
+
+            ntlm_init.to_bytes().expect("can't blobify ntlm init message")
+        };
+
+
+        let (info, setup) = self.session_setup(msg::SessionSetup::new(ntlm_init_blob))
+            .await?;
+
+
+        // take over uid the server gave us
+        self.info.uid = info.uid;
+
+        // try to parse security blob into ntlm challenge
+        let ntlm_challenge = ntlm::ChallengeMsg::parse(&setup.security_blob)?;
+        let ntlm_response = ntlm_challenge.response(&self.auth)?;
+        let (info, _setup) = self.session_setup(msg::SessionSetup::new(ntlm_response)).await?;
+
+        // check status, just to be sure
+        info.status.try_me().map_err(|e| Error::SMBError(e))
     }
 
-
     pub async fn negotiate(&mut self) -> Result<reply::Negotiate, Error> {
-        let msg = msg::Negotiate {};
-        let (_, response) = self.cmd(msg).await?;
-
-        Ok(response)
+        self.command(msg::Negotiate{})
+            .await
+            .map(|v| v.1)
+            .map_err(|e| e.into())
     }
 
     pub async fn session_setup(&mut self, msg: msg::SessionSetup)
         -> Result<(Info, reply::SessionSetup), Error>
     {
-        self.cmd(msg)
+        self.command(msg)
             .await
             .map_err(|e| e.into())
     }
 
 
-    /*
-    async fn cmd<T: smb::Reply>(&mut self, msg: impl smb::Msg)
-        -> Result<(smb::Info, T), Error>
-    */
-    async fn cmd<M,R>(&mut self, msg: M) -> Result<(Info, R), Error>
+    async fn command<M,R>(&mut self, msg: M) -> Result<(Info, R), Error>
     where
         M: msg::Msg,
         R: reply::Reply,
     {
-        self.write_frame(msg.package()?)
-            .await?;
+        self.write_frame(msg.info_package(&self.info)?).await?;
 
-        let (info, reply) = reply::parse(self.read_frame().await?)?;
-
-        Ok((info, reply))
+        reply::parse(self.read_frame().await?)
+            .map_err(|e| e.into())
     }
 
     async fn write_frame(&mut self, msg: Bytes) -> Result<(), Error> {
         if msg.len() > MAX_FRAME_LENGTH {
             return Err(Error::InputParam("message too long for frame".to_owned()));
         }
+
         let n: u32 = msg.len().try_into()?;
 
-        self.stream.write_u8(0).await?;
-        self.stream.write_all(&n.to_be_bytes()[1..4]).await?;
-        self.stream.write_all(&msg[..]).await?;
+        // build frame
+        let mut frame = BytesMut::with_capacity(4 + msg.len());
+        frame.put_u8(0);
+        frame.put(&n.to_be_bytes()[1..4]);
+        frame.put(msg);
+
+        // send it
+        self.stream.write_all(&frame[..]).await?;
+        self.stream.flush().await?;
 
         Ok(())
     }

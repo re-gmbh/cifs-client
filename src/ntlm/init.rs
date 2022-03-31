@@ -43,6 +43,14 @@ pub struct Version {
 }
 
 impl Version {
+    pub fn default() -> Self {
+        Version {
+            major: 5,
+            minor: 0,
+            build: 2195,
+        }
+    }
+
     fn as_bytes(&self) -> Bytes {
         let mut buffer = BytesMut::with_capacity(8);
         buffer.put_u8(self.major);
@@ -54,52 +62,66 @@ impl Version {
     }
 }
 
+struct Origin {
+    workstation: String,
+    domain: String,
+}
+
 
 pub struct InitMsg {
-    pub flags: Flags,
-    pub auth: Option<Auth>,
-    pub version: Option<Version>,
+    flags: Flags,
+    origin: Option<Origin>,
+    version: Option<Version>,
 }
 
 impl InitMsg {
     pub fn new(flags: Flags) -> Self {
         InitMsg {
             flags,
-            auth: None,
+            origin: None,
             version: None,
         }
     }
 
-    pub fn set_auth(&mut self,
-                    user: &str,
-                    workstation: &str,
-                    domain: &str,
-                    pass: &str)
-    {
-        self.auth = Some(Auth::new(user, workstation, domain, pass));
+    pub fn set_origin(&mut self, domain: &str, workstation: &str) {
+        let origin = Origin {
+            domain: domain.to_owned(),
+            workstation: workstation.to_owned(),
+        };
+
+        self.origin = Some(origin);
+    }
+
+    /// Don't send any version information in our NTLM init message
+    pub fn reset_version(&mut self) {
+        self.version = None;
     }
 
     pub fn set_version(&mut self, major: u8, minor: u8, build: u16) {
         self.version = Some(Version { major, minor, build });
     }
 
+    pub fn set_default_version(&mut self) {
+        self.version = Some(Version::default());
+    }
 
-    pub fn write(&self, out: &mut BytesMut) -> Result<(), Error> {
+
+    pub fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut packet = Packet::new();
 
         packet.append_binary(NTLMSSP_MAGIC);
         packet.append_u32(NTLM_MSG_INIT);
         packet.append_u32(self.flags.bits());
 
-        if let Some(auth) = self.auth.as_ref() {
-            packet.append_buffer(auth.domain.as_bytes());
-            packet.append_buffer(auth.workstation.as_bytes());
+        if let Some(origin) = self.origin.as_ref() {
+            packet.append_buffer(origin.domain.as_bytes());
+            packet.append_buffer(origin.workstation.as_bytes());
         }
         if let Some(version) = self.version.as_ref() {
             packet.append_binary(version.as_bytes().as_ref());
         }
 
-        packet.write(out)
+        packet.to_bytes()
     }
 }
 
@@ -121,12 +143,13 @@ mod tests {
                                       | Flags::DOMAIN_SUPPLIED
                                       | Flags::WORKSTATION_SUPPLIED);
 
-        init_msg.set_auth("user", "WORKSTATION", "DOMAIN", "SecREt01");
+        init_msg.set_origin("DOMAIN", "WORKSTATION");
         init_msg.set_version(5, 0, 2195);
 
-        let mut buffer = BytesMut::with_capacity(512);
-        init_msg.write(&mut buffer)
+        let buffer = init_msg
+            .to_bytes()
             .expect("error writing NTLM init message");
+
 
         /* i swapped positions of domain and workstation data */
         let expected = hex!(
