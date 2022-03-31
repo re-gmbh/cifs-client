@@ -3,16 +3,26 @@ use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use bytes::{Bytes, BytesMut, BufMut};
 
 use crate::{Error, Auth};
-use crate::smb::{Info, msg, reply};
+use crate::smb::{Info, Capabilities, msg, reply};
 use crate::ntlm;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
+
+#[derive(Debug)]
+pub struct ConnectionState {
+    name: String,
+    max_smb_size: usize,
+    server_capabilities: Capabilities,
+}
 
 
 pub struct Cifs {
     auth: Auth,
     stream: TcpStream,
+
     info: Info,
+
+    pub state: Option<ConnectionState>,
 }
 
 
@@ -22,13 +32,13 @@ impl Cifs {
             auth,
             stream,
             info: Info::default(),
+            state: None,
         }
     }
 
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        // TODO: should save server setup from negotiate
-        let _ = self.negotiate().await?;
+        let negotiated_setup = self.negotiate().await?;
 
         let ntlm_init_blob = {
             let mut ntlm_init = ntlm::InitMsg::new(
@@ -42,34 +52,41 @@ impl Cifs {
             ntlm_init.set_origin(&self.auth.domain, &self.auth.workstation);
             ntlm_init.set_default_version();
 
-            ntlm_init.to_bytes().expect("can't blobify ntlm init message")
+            ntlm_init.to_bytes().expect("can't blobify NTLM init message")
         };
 
 
-        let (info, setup) = self.session_setup(msg::SessionSetup::new(ntlm_init_blob))
+        let (info, setup_response) = self.session_setup(msg::SessionSetup::new(ntlm_init_blob))
             .await?;
-
 
         // take over uid the server gave us
         self.info.uid = info.uid;
 
         // try to parse security blob into ntlm challenge
-        let ntlm_challenge = ntlm::ChallengeMsg::parse(&setup.security_blob)?;
+        let ntlm_challenge = ntlm::ChallengeMsg::parse(&setup_response.security_blob)?;
         let ntlm_response = ntlm_challenge.response(&self.auth)?;
-        let (info, _setup) = self.session_setup(msg::SessionSetup::new(ntlm_response)).await?;
+        let (info, _) = self.session_setup(msg::SessionSetup::new(ntlm_response)).await?;
 
         // check status, just to be sure
-        info.status.try_me().map_err(|e| Error::SMBError(e))
+        info.status.try_me()?;
+
+        self.state = Some(ConnectionState {
+            name: ntlm_challenge.target,
+            max_smb_size: negotiated_setup.max_buffer_size as usize,
+            server_capabilities: negotiated_setup.capabilities,
+        });
+
+        Ok(())
     }
 
-    pub async fn negotiate(&mut self) -> Result<reply::Negotiate, Error> {
+    async fn negotiate(&mut self) -> Result<reply::Negotiate, Error> {
         self.command(msg::Negotiate{})
             .await
             .map(|v| v.1)
             .map_err(|e| e.into())
     }
 
-    pub async fn session_setup(&mut self, msg: msg::SessionSetup)
+    async fn session_setup(&mut self, msg: msg::SessionSetup)
         -> Result<(Info, reply::SessionSetup), Error>
     {
         self.command(msg)

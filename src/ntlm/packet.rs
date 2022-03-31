@@ -1,5 +1,6 @@
 use bytes::{Bytes, BytesMut, BufMut};
 
+use crate::utils;
 use super::buffer::Buffer;
 use super::Error;
 
@@ -54,13 +55,7 @@ impl Packet {
 
     pub fn append_string(&mut self, msg: &str, unicode: bool) {
         if unicode {
-            let encoded: Vec<u8> = msg
-                .encode_utf16()
-                .map(|c| c.to_le_bytes())
-                .flatten()
-                .collect();
-
-            self.append_buffer(&encoded);
+            self.append_buffer(&utils::encode_utf16le(msg));
         } else {
             self.append_buffer(msg.as_bytes());
         }

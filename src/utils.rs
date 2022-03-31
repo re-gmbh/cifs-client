@@ -39,13 +39,13 @@ pub fn md4_oneshot(data: &[u8]) -> [u8; 16] {
 
 
 
-enum ParseStrError {
+pub enum ParseStrError {
     MissingTermination,
     InvalidUnicode,
 }
 
 #[allow(dead_code)]
-fn parse_str0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
+pub fn parse_str0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
     let mut data = Vec::new();
 
     while buffer.has_remaining() {
@@ -59,4 +59,19 @@ fn parse_str0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
     }
 
     Err(ParseStrError::MissingTermination)
+}
+
+pub fn encode_utf16le(msg: &str) -> Vec<u8> {
+    msg.encode_utf16()
+       .map(|c| c.to_le_bytes())
+       .flatten()
+       .collect()
+}
+
+pub fn parse_utf16le(raw: &[u8]) -> Result<String, std::char::DecodeUtf16Error> {
+    let iter = (0..raw.len())
+        .step_by(2)
+        .map(|i| u16::from_le_bytes([raw[i], raw[i+1]]));
+
+    std::char::decode_utf16(iter).collect()
 }

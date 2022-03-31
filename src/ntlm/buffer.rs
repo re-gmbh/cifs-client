@@ -1,5 +1,6 @@
 use bytes::{Bytes, Buf, BytesMut, BufMut};
 
+use crate::utils;
 use super::Error;
 
 pub struct Buffer {
@@ -39,18 +40,14 @@ impl Buffer {
         let raw = self.extract(buffer);
 
         if unicode {
-            let n = self.length;
-            let iter = (0..n)
-                .step_by(2)
-                .map(|i| u16::from_le_bytes([raw[i], raw[i+1]]));
-
-            std::char::decode_utf16(iter)
-                .collect::<Result<String, std::char::DecodeUtf16Error>>()
+            utils::parse_utf16le(raw.as_ref())
                 .map_err(|_| Error::InvalidPacket)
+
         } else {
             // just treat as utf8, i know this is not exactly correct since
-            // it might use non-ascii characters from DOS codepage.
-            String::from_utf8(Vec::from(&raw[..])).map_err(|_| Error::InvalidPacket)
+            // it might use non-ascii characters from DOS codepage.. YOLO!
+            String::from_utf8(Vec::from(raw.as_ref()))
+                .map_err(|_| Error::InvalidPacket)
         }
     }
 }
