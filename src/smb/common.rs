@@ -232,10 +232,10 @@ impl Status {
 pub enum RawCmd {
     Close = 0x04,
     Read = 0x2e,
-    Transaction2 = 0x32,
     Negotiate = 0x72,
     SessionSetup = 0x73,
     TreeConnect = 0x75,
+    Create = 0xa2,
     NoCommand = 0xff,
 }
 

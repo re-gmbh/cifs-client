@@ -1,7 +1,7 @@
 use bytes::{Bytes, Buf};
 
 use crate::utils;
-use crate::win::{NTStatus, DirAccessMask};
+use crate::win::*;
 use super::common::*;
 
 pub trait Reply: Sized {
@@ -146,9 +146,9 @@ impl Reply for SessionSetup {
 }
 
 
-/// TreeConnect reply
+/// Share is the DataType returned by TreeConnect command
 #[derive(Debug)]
-pub struct TreeConnect {
+pub struct Share {
     pub access_rights: DirAccessMask,
     pub guest_rights: DirAccessMask,
     pub service: String,
@@ -157,8 +157,7 @@ pub struct TreeConnect {
 }
 
 
-
-impl Reply for TreeConnect {
+impl Reply for Share {
     const CMD: RawCmd = RawCmd::TreeConnect;
     const ANDX: bool = true;
 
@@ -183,12 +182,80 @@ impl Reply for TreeConnect {
             utils::parse_str_0(&mut data)
         }?;
 
-        let reply = TreeConnect {
+        let reply = Self {
             access_rights,
             guest_rights,
             service,
             filesystem,
             tid: info.tid,
+        };
+
+        Ok(reply)
+    }
+}
+
+
+/// FileHandle is the struct returned by 'Create' SMB message
+#[derive(Debug)]
+pub struct FileHandle {
+    pub fid: u16,
+    pub oplock: OpLockLevel,
+    pub disposition: CreateDisposition,
+    pub create_time: u64,
+    pub access_time: u64,
+    pub write_time: u64,
+    pub change_time: u64,
+    pub attributes: ExtFileAttr,
+    pub allocation_size: u64,
+    pub file_size: u64,
+    pub file_type: ResourceType,
+    pub directory: bool,
+}
+
+impl Reply for FileHandle {
+    const CMD: RawCmd = RawCmd::Create;
+    const ANDX: bool = true;
+
+    fn parse_param(_info: &Info, mut parameter: Bytes, _data: Bytes)
+        -> Result<Self, Error>
+    {
+        // parameter
+        let oplock = OpLockLevel::from_bits_truncate(parameter.get_u8());
+        let fid = parameter.get_u16_le();
+        let disposition = CreateDisposition::from_bits_truncate(parameter.get_u32_le());
+
+        let create_time = parameter.get_u64_le();
+        let access_time = parameter.get_u64_le();
+        let write_time = parameter.get_u64_le();
+        let change_time = parameter.get_u64_le();
+
+        let attributes = ExtFileAttr::from_bits_truncate(parameter.get_u32_le());
+        let allocation_size = parameter.get_u64_le();
+        let file_size = parameter.get_u64_le();
+        let file_type = ResourceType::from_bits_truncate(parameter.get_u16_le());
+
+        parameter.advance(2);       // ignore 2 byte pipe status
+        let directory = match parameter.get_u8() {
+            0 => false,
+            1 => true,
+
+            _ => return Err(Error::InvalidData),
+        };
+
+
+        let reply = Self {
+            oplock,
+            fid,
+            disposition,
+            create_time,
+            access_time,
+            write_time,
+            change_time,
+            attributes,
+            allocation_size,
+            file_size,
+            file_type,
+            directory,
         };
 
         Ok(reply)
@@ -203,7 +270,7 @@ impl Reply for TreeConnect {
 /// On the other hand CIFS is free to send any response it likes (ie out of order,
 /// or multiple responses chained together, ...), so this is not the most robust
 /// approach.
-pub fn parse<T: Reply>(mut buffer: Bytes) -> Result<T, Error> {
+pub(crate) fn parse<T: Reply>(mut buffer: Bytes) -> Result<T, Error> {
     // check if we have at least our SMB header?
     if buffer.remaining() < SMB_HEADER_LEN {
         return Err(Error::InvalidHeader);

@@ -1,12 +1,14 @@
-pub mod connection;
-pub mod error;
-pub mod ntlm;
-pub mod smb;
+mod connection;
+mod error;
+mod ntlm;
+mod smb;
 mod win;
 mod netbios;
 mod utils;
 
-// re-export important types directly in crate-root
+// export important types
 pub use error::Error;
 pub use ntlm::Auth;
 pub use connection::Cifs;
+pub use win::*;
+pub use smb::reply::*;

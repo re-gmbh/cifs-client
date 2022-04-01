@@ -4,14 +4,7 @@ use bytes::Bytes;
 use crate::{Error, Auth, smb, ntlm};
 use crate::netbios::NetBios;
 use crate::smb::{SmbOpts, msg, reply};
-use crate::win::DirAccessMask;
-
-#[derive(Debug)]
-pub struct Share {
-    pub path: String,
-    pub access: DirAccessMask,
-    tid: u16,
-}
+use crate::smb::reply::{Share, FileHandle};
 
 
 pub struct Cifs {
@@ -73,16 +66,14 @@ impl Cifs {
         -> Result<Share, Error>
     {
         let normalized = path.replace("/", "\\");
-        let cmd = msg::TreeConnect::new(&normalized, password);
-        let reply: reply::TreeConnect = self.command(cmd).await?;
+        self.command(msg::TreeConnect::new(&normalized, password)).await
+    }
 
-        let result = Share {
-            path: path.to_owned(),
-            access: reply.access_rights,
-            tid: reply.tid,
-        };
-
-        Ok(result)
+    pub async fn open_file(&mut self, share: &Share, name: &str)
+        -> Result<FileHandle, Error>
+    {
+        let filename = name.replace("/", "\\");
+        self.command(msg::OpenFile::ro(share.tid, filename)).await
     }
 
 

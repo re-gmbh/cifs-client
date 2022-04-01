@@ -92,11 +92,7 @@ impl InitMsg {
         self.origin = Some(origin);
     }
 
-    /// Don't send any version information in our NTLM init message
-    pub fn reset_version(&mut self) {
-        self.version = None;
-    }
-
+    #[allow(dead_code)]
     pub fn set_version(&mut self, major: u8, minor: u8, build: u16) {
         self.version = Some(Version { major, minor, build });
     }

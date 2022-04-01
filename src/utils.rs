@@ -46,14 +46,12 @@ pub fn encode_utf16le(msg: &str) -> Vec<u8> {
        .collect()
 }
 
-/*
 pub fn encode_utf16le_0(msg: &str) -> Vec<u8> {
     let mut result = encode_utf16le(msg);
     result.push(0);
     result.push(0);
     result
 }
-*/
 
 pub enum ParseStrError {
     MissingTermination,

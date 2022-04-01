@@ -1,6 +1,6 @@
-use bitflags::bitflags;
 use bytes::{Bytes, BytesMut, BufMut};
 
+use crate::win::*;
 use crate::utils;
 use super::common::*;
 
@@ -167,14 +167,6 @@ pub struct TreeConnect {
     flags: TreeConnectFlags,
 }
 
-bitflags! {
-    struct TreeConnectFlags: u16 {
-        const DISCONNECT_TID        = 0x0001;
-        const EXTENDED_SIGNATURE    = 0x0004;
-        const EXTENDED_RESPONSE     = 0x0008;
-    }
-}
-
 impl TreeConnect {
     pub fn new(path: &str, password: &str) -> Self {
         let flags = TreeConnectFlags::EXTENDED_RESPONSE;
@@ -226,6 +218,78 @@ impl Msg for TreeConnect {
         // zero-terminated name of service ('?????' matches anything)
         data.put_bytes(0x3f, 5);
         data.put_u8(0);
+    }
+}
+
+
+/// OpenFile defines the parameter for the 'Create' SMB message, which is used
+/// to open a new or existing file.
+pub struct OpenFile {
+    tid: u16,
+    filename: String,
+    create_flags: CreateFlags,
+    directory: u32,
+    access: FileAccessMask,
+    allocation_size: u64,
+    attributes: ExtFileAttr,
+    share_access: ShareAccess,
+    disposition: CreateDisposition,
+    options: CreateOptions,
+    impersonation: ImpersonationLevel,
+    security: SecurityFlags,
+}
+
+impl OpenFile {
+    pub fn ro(tid: u16, filename: String) -> Self {
+        Self {
+            tid,
+            filename,
+            create_flags: CreateFlags::REQUEST_OPLOCK | CreateFlags::REQUEST_OPBATCH,
+            directory: 0,
+            access: FileAccessMask::READ | FileAccessMask::READ_EA,
+            allocation_size: 0,
+            attributes: ExtFileAttr::empty(),
+            share_access: ShareAccess::READ,
+            disposition: CreateDisposition::OPEN,
+            options: CreateOptions::NON_DIRECTORY | CreateOptions::SEQUENTIAL_ONLY,
+            impersonation: ImpersonationLevel::IMPERSONATE,
+            security: SecurityFlags::empty(),
+        }
+    }
+}
+
+impl Msg for OpenFile {
+    const CMD: RawCmd = RawCmd::Create;
+    const ANDX: bool = true;
+
+    /// generate info data for header of this smb message based on options
+    fn info(&self, opts: &SmbOpts) -> Info {
+        let mut info = Info::from_opts(opts);
+        info.tid = self.tid;
+
+        info
+    }
+
+    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+        let filename_length: u16 = self.filename.len().try_into().expect("filename too long");
+
+        // parameter
+        parameter.put_u8(0);    // reserved
+        parameter.put_u16_le(filename_length);
+        parameter.put_u32_le(self.create_flags.bits());
+        parameter.put_u32_le(self.directory);
+        parameter.put_u32_le(self.access.bits());
+        parameter.put_u64_le(self.allocation_size);
+        parameter.put_u32_le(self.attributes.bits());
+        parameter.put_u32_le(self.share_access.bits());
+        parameter.put_u32_le(self.disposition.bits());
+        parameter.put_u32_le(self.options.bits());
+        parameter.put_u32_le(self.impersonation.bits());
+        parameter.put_u8(self.security.bits());
+
+        // data
+        data.put_u8(0); // alignment padding
+        data.put(utils::encode_utf16le_0(&self.filename).as_ref());
     }
 }
 
