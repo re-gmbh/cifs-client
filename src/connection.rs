@@ -76,6 +76,11 @@ impl Cifs {
         self.command(msg::OpenFile::ro(share.tid, filename)).await
     }
 
+    pub async fn close(&mut self, file: FileHandle) -> Result<(), Error> {
+        let _: reply::Close = self.command(msg::Close::handle(file)).await?;
+        Ok(())
+    }
+
 
     //
     // private SMB functions

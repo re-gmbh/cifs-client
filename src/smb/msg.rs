@@ -3,6 +3,7 @@ use bytes::{Bytes, BytesMut, BufMut};
 use crate::win::*;
 use crate::utils;
 use super::common::*;
+use super::reply::FileHandle;
 
 
 pub trait Msg {
@@ -293,6 +294,43 @@ impl Msg for OpenFile {
     }
 }
 
+
+/// Close represents the SMB Close message
+pub struct Close {
+    tid: u16,
+    fid: u16,
+}
+
+impl Close {
+    pub fn new(tid: u16, fid: u16) -> Self {
+        Close {
+            tid,
+            fid,
+        }
+    }
+
+    pub fn handle(file: FileHandle) -> Self {
+        Close::new(file.tid, file.fid)
+    }
+}
+
+impl Msg for Close {
+    const CMD: RawCmd = RawCmd::Close;
+    const ANDX: bool = false;
+
+    fn info(&self, opts: &SmbOpts) -> Info {
+        let mut info = Info::from_opts(opts);
+        info.tid = self.tid;
+        info
+    }
+
+    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, _data: &mut BytesMut) {
+        parameter.put_u16_le(self.fid);
+        // last time modified (0 means don't update)
+        parameter.put_u32_le(0);
+    }
+
+}
 
 
 #[cfg(test)]

@@ -195,9 +195,11 @@ impl Reply for Share {
 }
 
 
+
 /// FileHandle is the struct returned by 'Create' SMB message
 #[derive(Debug)]
 pub struct FileHandle {
+    pub tid: u16,
     pub fid: u16,
     pub oplock: OpLockLevel,
     pub disposition: CreateDisposition,
@@ -216,7 +218,7 @@ impl Reply for FileHandle {
     const CMD: RawCmd = RawCmd::Create;
     const ANDX: bool = true;
 
-    fn parse_param(_info: &Info, mut parameter: Bytes, _data: Bytes)
+    fn parse_param(info: &Info, mut parameter: Bytes, _data: Bytes)
         -> Result<Self, Error>
     {
         // parameter
@@ -244,8 +246,9 @@ impl Reply for FileHandle {
 
 
         let reply = Self {
-            oplock,
+            tid: info.tid,
             fid,
+            oplock,
             disposition,
             create_time,
             access_time,
@@ -262,6 +265,21 @@ impl Reply for FileHandle {
     }
 }
 
+
+/// SMB Close Message (does not return anything)
+#[derive(Debug)]
+pub struct Close {}
+
+impl Reply for Close {
+    const CMD: RawCmd = RawCmd::Close;
+    const ANDX: bool = false;
+
+    fn parse_param(_info: &Info, _parameter: Bytes, _data: Bytes)
+        -> Result<Self, Error>
+    {
+        Ok(Self {})
+    }
+}
 
 
 /// Parse buffer into a specific reply. This is our normal use case, because
