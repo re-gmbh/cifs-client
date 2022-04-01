@@ -1,5 +1,6 @@
 use bytes::{Bytes, Buf};
 
+use crate::utils;
 use super::common::*;
 
 pub trait Reply: Sized {
@@ -141,6 +142,53 @@ impl Reply for SessionSetup {
     }
 }
 
+
+/// TreeConnect reply
+#[derive(Debug)]
+pub struct TreeConnect {
+    pub access_rights: DirAccessMask,
+    pub guest_rights: DirAccessMask,
+    pub service: String,
+    pub filesystem: String,
+}
+
+
+
+impl Reply for TreeConnect {
+    const CMD: RawCmd = RawCmd::TreeConnect;
+    const ANDX: bool = true;
+
+    fn parse_param(info: &Info, mut parameter: Bytes, mut data: Bytes)
+        -> Result<Self, Error>
+    {
+        // parameter
+        parameter.advance(2);       // ignore optional support
+        let access_rights = DirAccessMask::from_bits_truncate(parameter.get_u32_le());
+        let guest_rights = DirAccessMask::from_bits_truncate(parameter.get_u32_le());
+
+        // data
+        let service = utils::parse_str_0(&mut data)?;
+
+        let filesystem = if info.flags2.contains(Flags2::UNICODE) {
+            // skip one byte padding
+            if service.len() % 2 == 1 {
+                data.advance(1);
+            }
+            utils::parse_utf16le_0(&mut data)
+        } else {
+            utils::parse_str_0(&mut data)
+        }?;
+
+        let reply = TreeConnect {
+            access_rights,
+            guest_rights,
+            service,
+            filesystem,
+        };
+
+        Ok(reply)
+    }
+}
 
 
 

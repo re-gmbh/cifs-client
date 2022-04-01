@@ -28,14 +28,14 @@ impl Auth {
     /// illegal. Please understand that this is possibly the worst password
     /// hash ever devised!
     fn ntlm_hash(&self) -> [u8; 16] {
-        let unicoded = utils::to_utf16le(&self.password);
+        let unicoded = utils::encode_utf16le(&self.password);
         utils::md4_oneshot(&unicoded)
     }
 
     /// Version 2 is still pretty stupid..
     fn ntlmv2_hash(&self) -> [u8; 16] {
         let key = self.ntlm_hash();
-        let data = utils::to_utf16le(&(self.user.to_uppercase() + &self.domain));
+        let data = utils::encode_utf16le(&(self.user.to_uppercase() + &self.domain));
 
         utils::hmac_md5_oneshot(&key, &data)
     }

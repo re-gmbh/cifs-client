@@ -4,13 +4,6 @@ use md5::{Digest, Md5};
 use hmac::{Hmac, Mac};
 use bytes::{Bytes, Buf};
 
-
-pub fn to_utf16le(data: &str) -> Vec<u8> {
-    data.encode_utf16()
-        .map(|c| c.to_le_bytes())
-        .fold(Vec::new(), |mut acc, x| { acc.extend_from_slice(&x); acc } )
-}
-
 pub fn get_windows_time() -> u64 {
     let back_then = Utc.ymd(1601, 1, 1).and_hms(0, 1, 1);
     let now = Utc::now();
@@ -38,14 +31,36 @@ pub fn md4_oneshot(data: &[u8]) -> [u8; 16] {
 }
 
 
+pub fn decode_utf16le(raw: &[u8]) -> Result<String, std::char::DecodeUtf16Error> {
+    let iter = (0..raw.len())
+        .step_by(2)
+        .map(|i| u16::from_le_bytes([raw[i], raw[i+1]]));
+
+    std::char::decode_utf16(iter).collect()
+}
+
+pub fn encode_utf16le(msg: &str) -> Vec<u8> {
+    msg.encode_utf16()
+       .map(|c| c.to_le_bytes())
+       .flatten()
+       .collect()
+}
+
+/*
+pub fn encode_utf16le_0(msg: &str) -> Vec<u8> {
+    let mut result = encode_utf16le(msg);
+    result.push(0);
+    result.push(0);
+    result
+}
+*/
 
 pub enum ParseStrError {
     MissingTermination,
     InvalidUnicode,
 }
 
-#[allow(dead_code)]
-pub fn parse_str0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
+pub fn parse_str_0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
     let mut data = Vec::new();
 
     while buffer.has_remaining() {
@@ -61,17 +76,19 @@ pub fn parse_str0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
     Err(ParseStrError::MissingTermination)
 }
 
-pub fn encode_utf16le(msg: &str) -> Vec<u8> {
-    msg.encode_utf16()
-       .map(|c| c.to_le_bytes())
-       .flatten()
-       .collect()
-}
+pub fn parse_utf16le_0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
+    let mut data: Vec<u16> = Vec::new();
 
-pub fn parse_utf16le(raw: &[u8]) -> Result<String, std::char::DecodeUtf16Error> {
-    let iter = (0..raw.len())
-        .step_by(2)
-        .map(|i| u16::from_le_bytes([raw[i], raw[i+1]]));
+    while buffer.remaining() >= 2 {
+        let next = buffer.get_u16_le();
+        if next == 0 {
+            return std::char::decode_utf16(data.into_iter())
+                .map(|c| c.map_err(|_| ParseStrError::InvalidUnicode))
+                .collect();
+        }
 
-    std::char::decode_utf16(iter).collect()
+        data.push(next);
+    }
+
+    Err(ParseStrError::MissingTermination)
 }

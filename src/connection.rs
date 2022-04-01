@@ -3,26 +3,18 @@ use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use bytes::{Bytes, BytesMut, BufMut};
 
 use crate::{Error, Auth};
-use crate::smb::{Info, Capabilities, msg, reply};
+use crate::smb::{self, SmbOpts, Info, msg, reply};
 use crate::ntlm;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
-
-#[derive(Debug)]
-pub struct ConnectionState {
-    name: String,
-    max_smb_size: usize,
-    server_capabilities: Capabilities,
-}
 
 
 pub struct Cifs {
     auth: Auth,
     stream: TcpStream,
 
+    opts: SmbOpts,
     info: Info,
-
-    pub state: Option<ConnectionState>,
 }
 
 
@@ -31,14 +23,22 @@ impl Cifs {
         Cifs {
             auth,
             stream,
+            opts: SmbOpts::default(),
             info: Info::default(),
-            state: None,
         }
     }
 
 
     pub async fn connect(&mut self) -> Result<(), Error> {
         let negotiated_setup = self.negotiate().await?;
+
+        // update connection options based on what we learned
+        self.opts = SmbOpts {
+            max_smb_size: negotiated_setup.max_buffer_size as usize,
+            unicode: negotiated_setup.capabilities.contains(smb::Capabilities::UNICODE),
+        };
+
+        self.info.flags2.set(smb::Flags2::UNICODE, self.opts.unicode);
 
         let ntlm_init_blob = {
             let mut ntlm_init = ntlm::InitMsg::new(
@@ -70,14 +70,17 @@ impl Cifs {
         // check status, just to be sure
         info.status.try_me()?;
 
-        self.state = Some(ConnectionState {
-            name: ntlm_challenge.target,
-            max_smb_size: negotiated_setup.max_buffer_size as usize,
-            server_capabilities: negotiated_setup.capabilities,
-        });
-
         Ok(())
     }
+
+    pub async fn tree_connect(&mut self, path: &str, password: &str)
+        -> Result<(Info, reply::TreeConnect), Error>
+    {
+        self.command(msg::TreeConnect::new(path, password))
+            .await
+            .map_err(|e| e.into())
+    }
+
 
     async fn negotiate(&mut self) -> Result<reply::Negotiate, Error> {
         self.command(msg::Negotiate{})
@@ -100,7 +103,7 @@ impl Cifs {
         M: msg::Msg,
         R: reply::Reply,
     {
-        self.write_frame(msg.info_package(&self.info)?).await?;
+        self.write_frame(msg.info_package(&self.opts, &self.info)?).await?;
 
         reply::parse(self.read_frame().await?)
             .map_err(|e| e.into())

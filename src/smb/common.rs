@@ -6,6 +6,8 @@ use bitflags::bitflags;
 use bytes::{Bytes, Buf, BytesMut, BufMut};
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
 
+use crate::utils;
+
 
 pub const SMB_MAX_LEN: usize = 4096;
 pub const SMB_HEADER_LEN: usize = 32;
@@ -32,7 +34,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::InvalidHeader => write!(f, "invalid header"),
-            Error::InvalidData => write!(f, "invalid data"),
+            Error::InvalidData => write!(f, "invalid packet data"),
             Error::InvalidCommand(cmd) => write!(f, "invalid command: {:02x}", cmd),
             Error::NoDialect => write!(f, "no supported dialect found"),
             Error::ReplyExpected => write!(f, "reply expected, but got command"),
@@ -62,6 +64,30 @@ impl From<TryFromIntError> for Error {
         Error::InvalidData
     }
 }
+
+impl From<utils::ParseStrError> for Error {
+    fn from(_err: utils::ParseStrError) -> Self {
+        Error::InvalidData
+    }
+}
+
+
+#[derive(Debug)]
+pub struct SmbOpts {
+    pub max_smb_size: usize,
+    pub unicode: bool,
+}
+
+impl SmbOpts {
+    pub fn default() -> Self {
+        Self {
+            max_smb_size: 1024,
+            unicode: true,
+        }
+    }
+}
+
+
 
 bitflags! {
     pub struct Flags1: u8 {
@@ -354,5 +380,56 @@ impl AndX {
         buffer.put_u8(self.cmd as u8);
         buffer.put_u8(0);
         buffer.put_u16_le(self.offset);
+    }
+}
+
+
+bitflags! {
+    /// File Acces Mask
+    pub struct FileAccessMask: u32 {
+        const READ_DATA         = 0x00000001;
+        const WRITE_DATA        = 0x00000002;
+        const APPEND_DATA       = 0x00000004;
+        const READ_EA           = 0x00000008;
+        const WRITE_EA          = 0x00000010;
+        const EXECUTE           = 0x00000020;
+        const DELETE_CHILD      = 0x00000040;
+        const READ_ATTRIBUTES   = 0x00000080;
+        const WRITE_ATTRIBUTES  = 0x00000100;
+        const DELETE            = 0x00010000;
+        const READ_CONTROL      = 0x00020000;
+        const WRITE_DAC         = 0x00040000;
+        const WRITE_OWNER       = 0x00080000;
+        const SYNCHRONIZE       = 0x00100000;
+        const ACCESS_SECURITY   = 0x01000000;
+        const MAXIMUM_ALLOWED   = 0x02000000;
+        const GENERIC_ALL       = 0x10000000;
+        const GENERIC_EXECUTE   = 0x20000000;
+        const GENERIC_WRITE     = 0x40000000;
+        const GENERIC_READ      = 0x80000000;
+    }
+
+    /// Directory Acces Mask
+    pub struct DirAccessMask: u32 {
+        const LIST_DIRECTORY    = 0x00000001;
+        const ADD_FILE          = 0x00000002;
+        const ADD_SUBDIRECTORY  = 0x00000004;
+        const READ_EA           = 0x00000008;
+        const WRITE_EA          = 0x00000010;
+        const TRAVERSE          = 0x00000020;
+        const DELETE_CHILD      = 0x00000040;
+        const READ_ATTRIBUTES   = 0x00000080;
+        const WRITE_ATTRIBUTES  = 0x00000100;
+        const DELETE            = 0x00010000;
+        const READ_CONTROL      = 0x00020000;
+        const WRITE_DAC         = 0x00040000;
+        const WRITE_OWNER       = 0x00080000;
+        const SYNCHRONIZE       = 0x00100000;
+        const ACCESS_SECURITY   = 0x01000000;
+        const MAXIMUM_ALLOWED   = 0x02000000;
+        const GENERIC_ALL       = 0x10000000;
+        const GENERIC_EXECUTE   = 0x20000000;
+        const GENERIC_WRITE     = 0x40000000;
+        const GENERIC_READ      = 0x80000000;
     }
 }

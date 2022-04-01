@@ -40,7 +40,7 @@ impl Buffer {
         let raw = self.extract(buffer);
 
         if unicode {
-            utils::parse_utf16le(raw.as_ref())
+            utils::decode_utf16le(raw.as_ref())
                 .map_err(|_| Error::InvalidPacket)
 
         } else {
