@@ -9,17 +9,25 @@ pub trait Msg {
     const CMD: RawCmd;
     const ANDX: bool;
 
-    fn write(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut);
+    /// generate body for this smb message based on options
+    fn body(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut);
 
-    /// create a package of this message with the given information as header
-    fn info_package(&self, opts: &SmbOpts, info: &Info) -> Result<Bytes, Error> {
+    /// generate info data for header of this smb message based on options
+    fn info(&self, opts: &SmbOpts) -> Info {
+        Info::from_opts(opts)
+    }
+
+    /// give binary representation of this message
+    fn to_bytes(&self, opts: &SmbOpts) -> Result<Bytes, Error> {
         let mut buffer = BytesMut::with_capacity(opts.max_smb_size);
+
+        // create info for this packet
+        let info = self.info(opts);
 
         // write header
         buffer.put(&SMB_MAGIC[..]);
         buffer.put_u8(Self::CMD as u8);
         info.write(&mut buffer);
-
 
         // create space for package parameter and data
         let mut parameter = BytesMut::with_capacity(2*255);
@@ -33,7 +41,7 @@ pub trait Msg {
             }.write(&mut parameter);
         }
 
-        self.write(opts, &mut parameter, &mut data);
+        self.body(opts, &mut parameter, &mut data);
 
 
         // write package parameter
@@ -63,11 +71,6 @@ pub trait Msg {
 
         Ok(buffer.freeze())
     }
-
-    /// package this message with default header
-    fn package(&self, opts: &SmbOpts) -> Result<Bytes, Error> {
-        self.info_package(opts, &Info::default())
-    }
 }
 
 
@@ -78,7 +81,7 @@ impl Msg for Negotiate {
     const CMD: RawCmd = RawCmd::Negotiate;
     const ANDX: bool = false;
 
-    fn write(&self, _opts: &SmbOpts, _parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, _opts: &SmbOpts, _parameter: &mut BytesMut, data: &mut BytesMut) {
         for dialect in SMB_SUPPORTED_DIALECTS {
             data.put_u8(0x02);
             data.put(dialect.as_bytes());
@@ -97,8 +100,6 @@ pub struct SessionSetup {
     pub session_key: u32,
     pub capabilities: Capabilities,
     pub security_blob: Bytes,
-    //pub os_name: String,
-    //pub lanman: String;
 }
 
 impl SessionSetup {
@@ -111,7 +112,7 @@ impl SessionSetup {
 
 
         SessionSetup {
-            max_buffer_size: 4356,
+            max_buffer_size: 65535,
             max_mpx_count: 0,
             vc_number: 0,
             session_key: 0,
@@ -125,7 +126,7 @@ impl Msg for SessionSetup {
     const CMD: RawCmd = RawCmd::SessionSetup;
     const ANDX: bool = true;
 
-    fn write(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
         // safety
         let blob_len: u16 = self.security_blob
                                 .len()
@@ -190,7 +191,7 @@ impl Msg for TreeConnect {
     const CMD: RawCmd = RawCmd::TreeConnect;
     const ANDX: bool = true;
 
-    fn write(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
         // normalize password: if none is given replace it with a single binary zero
         let password = if self.password.len() > 0 {
             self.password.as_bytes()
@@ -238,11 +239,11 @@ mod tests {
     #[test]
     fn create_negotiate() {
         let msg = Negotiate {};
-        let package = msg.package(&SmbOpts::default())
+        let package = msg.to_bytes(&SmbOpts::default())
             .expect("can't create negotiate package");
 
         assert_eq!(&package[..], hex!(
-            "ff534d4272000000001803c8000000000000000000000000fffffffe00000000"
+            "ff534d4272000000001843c8000000000000000000000000fffffffe00000000"
             "000c00024e54204c4d20302e313200"));
     }
 
@@ -263,12 +264,11 @@ mod tests {
         };
 
         let opts = SmbOpts::default();
-
-        let package = msg.package(&opts)
+        let package = msg.to_bytes(&opts)
                          .expect("can't create SessionSetup package");
 
         assert_eq!(&package[..], hex!(
-            "ff534d4273000000001803c8000000000000000000000000fffffffe00000000"
+            "ff534d4273000000001843c8000000000000000000000000fffffffe00000000"
             "0cff00000004111000000000000000280000000000d40000a02d004e544c4d53"
             "53500001000000978208e2000000000000000000000000000000000a00614a00"
             "00000f0000000000"));

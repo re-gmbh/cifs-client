@@ -1,6 +1,7 @@
 use bytes::{Bytes, Buf};
 
 use crate::utils;
+use crate::win::{NTStatus, DirAccessMask};
 use super::common::*;
 
 pub trait Reply: Sized {
@@ -112,13 +113,14 @@ impl Reply for Negotiate {
 pub struct SessionSetup {
     pub guest_mode: bool,
     pub security_blob: Bytes,
+    pub uid: u16,
 }
 
 impl Reply for SessionSetup {
     const CMD: RawCmd = RawCmd::SessionSetup;
     const ANDX: bool = true;
 
-    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+    fn parse_param(info: &Info, mut parameter: Bytes, mut data: Bytes)
         -> Result<Self, Error>
     {
         // parse parameter
@@ -136,6 +138,7 @@ impl Reply for SessionSetup {
         let reply = SessionSetup {
             guest_mode: action & 0x0001 == 1,
             security_blob: blob,
+            uid: info.uid,
         };
 
         Ok(reply)
@@ -150,6 +153,7 @@ pub struct TreeConnect {
     pub guest_rights: DirAccessMask,
     pub service: String,
     pub filesystem: String,
+    pub tid: u16,
 }
 
 
@@ -184,6 +188,7 @@ impl Reply for TreeConnect {
             guest_rights,
             service,
             filesystem,
+            tid: info.tid,
         };
 
         Ok(reply)
@@ -198,7 +203,7 @@ impl Reply for TreeConnect {
 /// On the other hand CIFS is free to send any response it likes (ie out of order,
 /// or multiple responses chained together, ...), so this is not the most robust
 /// approach.
-pub fn parse<T: Reply>(mut buffer: Bytes) -> Result<(Info, T), Error> {
+pub fn parse<T: Reply>(mut buffer: Bytes) -> Result<T, Error> {
     // check if we have at least our SMB header?
     if buffer.remaining() < SMB_HEADER_LEN {
         return Err(Error::InvalidHeader);
@@ -242,7 +247,7 @@ pub fn parse<T: Reply>(mut buffer: Bytes) -> Result<(Info, T), Error> {
     // finally parse the expected package
     let reply = T::parse(&info, &mut buffer)?;
 
-    Ok((info, reply))
+    Ok(reply)
 }
 
 
@@ -254,13 +259,14 @@ mod tests {
 
     #[test]
     fn parse_negotiate_cmd() {
-        let blob = hex!("ff534d4272000000009853c8000000000000000000000000fffffffe00000000"
-                        "1100000310000100041100000000010000000000fde300808e6db6b79b3ed801"
-                        "0000001000f9fe3c88bf27b444bd3d74f7b2fdbf01");
-        let buffer = BytesMut::from(&blob[..]).freeze();
+        let buffer = BytesMut::from(hex!(
+                "ff534d4272000000009853c8000000000000000000000000fffffffe00000000"
+                "1100000310000100041100000000010000000000fde300808e6db6b79b3ed801"
+                "0000001000f9fe3c88bf27b444bd3d74f7b2fdbf01").as_ref()).freeze();
 
-        let (info,reply) = parse::<Negotiate>(buffer).expect("can't parse SMB blob");
+        let reply = parse::<Negotiate>(buffer).expect("can't parse SMB blob");
 
+        /*
         // check header infos
         assert_eq!(info.status, Status::Known(NTStatus::SUCCESS));
         assert_eq!(info.flags1, Flags1::REPLY
@@ -279,6 +285,7 @@ mod tests {
         assert_eq!(info.tid, 0xffff);
         assert_eq!(info.uid, 0);
         assert_eq!(info.mid, 0);
+        */
 
         // check reply
         assert_eq!(reply.dialect, "NT LM 0.12");
@@ -326,10 +333,10 @@ mod tests {
 
         let buffer = BytesMut::from(&blob[..]).freeze();
 
-        let (_,reply) = parse::<SessionSetup>(buffer).expect("can't parse SMB blob");
+        let reply = parse::<SessionSetup>(buffer).expect("can't parse SMB blob");
 
         assert_eq!(reply.guest_mode, false);
-        assert_eq!(&reply.security_blob[..], hex!(
+        assert_eq!(reply.security_blob.as_ref(), hex!(
             "4e544c4d5353500002000000140014003800000015828ae2d9102a72"
             "d8b439d200000000000000006c006c004c0000000501280a0000000f"
             "4b0049004500460045004c002d00490050004300020014004b004900"
