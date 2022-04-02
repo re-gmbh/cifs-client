@@ -1,9 +1,10 @@
 use bytes::{Bytes, BytesMut, BufMut};
 
-use crate::win::*;
 use crate::utils;
+use crate::win::*;
 use super::common::*;
 use super::reply::FileHandle;
+use super::trans::TransCmd;
 
 
 pub trait Msg {
@@ -76,7 +77,8 @@ pub trait Msg {
 }
 
 
-/// Negotiate is the first message send to a CIFS server
+/// This empty struct represents the SMB_COM_NEGOTIATE message, which
+/// is the first message send to a CIFS server
 pub struct Negotiate {}
 
 impl Msg for Negotiate {
@@ -93,8 +95,8 @@ impl Msg for Negotiate {
 }
 
 
-/// SessionSetup is send right after negotiation and used for authorization as
-/// well as sending client setup data back to server
+/// Parameter for SMB_COM_SESSION_SETUP_ANDX, which is send right after negotiation
+/// and used for authorization as well as sending client setup data back to server
 pub struct SessionSetup {
     pub max_buffer_size: u16,
     pub max_mpx_count: u16,
@@ -162,7 +164,7 @@ impl Msg for SessionSetup {
 
 
 
-/// TreeConnect is used to 'mount' a share
+/// Parameter for SMB_COM_TREE_CONNECT_ANDX, which is used to 'mount' a share
 pub struct TreeConnect {
     path: String,
     password: String,
@@ -249,9 +251,9 @@ impl Msg for TreeDisconnect {
 }
 
 
-/// OpenFile defines the parameter for the 'Create' SMB message, which is used
-/// to open a new or existing file.
-pub struct OpenFile {
+/// Open defines the parameter for the SMB_COM_NT_CREATE_ANDX message,
+/// which is used to open a new or existing file.
+pub struct Open {
     tid: u16,
     filename: String,
     create_flags: CreateFlags,
@@ -266,8 +268,8 @@ pub struct OpenFile {
     security: SecurityFlags,
 }
 
-impl OpenFile {
-    pub fn ro(tid: u16, filename: String) -> Self {
+impl Open {
+    pub fn file_ro(tid: u16, filename: String) -> Self {
         Self {
             tid,
             filename,
@@ -283,9 +285,26 @@ impl OpenFile {
             security: SecurityFlags::empty(),
         }
     }
+
+    pub fn dir(tid: u16, filename: String) -> Self {
+        Self {
+            tid,
+            filename,
+            create_flags: CreateFlags::empty(),
+            directory: 0,
+            access: FileAccessMask::READ,
+            allocation_size: 0,
+            attributes: ExtFileAttr::empty(),
+            share_access: ShareAccess::READ | ShareAccess::WRITE | ShareAccess::DELETE,
+            disposition: CreateDisposition::OPEN,
+            options: CreateOptions::DIRECTORY,
+            impersonation: ImpersonationLevel::IMPERSONATE,
+            security: SecurityFlags::empty(),
+        }
+    }
 }
 
-impl Msg for OpenFile {
+impl Msg for Open {
     const CMD: RawCmd = RawCmd::Create;
     const ANDX: bool = true;
 
@@ -321,7 +340,7 @@ impl Msg for OpenFile {
 }
 
 
-/// Close represents the SMB Close message
+/// Parameter for the SMB_COM_CLOSE message
 pub struct Close {
     tid: u16,
     fid: u16,
@@ -358,7 +377,7 @@ impl Msg for Close {
 }
 
 
-/// Parameter for the SMB Read (0x2e) message
+/// Parameter for the SMB_COM_READ_ANDX (0x2e) message
 pub struct Read {
     tid: u16,
     fid: u16,
@@ -405,6 +424,95 @@ impl Msg for Read {
 
         parameter.put_u32_le((self.offset >> 32) as u32);
     }
+}
+
+
+/// Parameter for SMB_COM_NT_TRANSACT with
+pub(crate) struct Transact<T> {
+    tid: u16,
+    subcmd: T,
+}
+
+impl<T: TransCmd> Transact<T> {
+    pub(crate) fn new(tid: u16, subcmd: T) -> Self {
+        Self {
+            tid,
+            subcmd,
+        }
+    }
+}
+
+impl<T: TransCmd> Msg for Transact<T> {
+    const CMD: RawCmd = RawCmd::Transact;
+    const ANDX: bool = false;
+
+    fn info(&self, opts: &SmbOpts) -> Info {
+        let mut info = Info::from_opts(opts);
+        info.tid = self.tid;
+        info
+    }
+
+    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+        // serialize sub command
+        let sub_setup = self.subcmd.setup();
+        let sub_setup_words: u8 = (sub_setup.len() / 2)
+            .try_into()
+            .expect("setup of transaction sub-command is too large");
+
+        let sub_parameter = self.subcmd.parameter();
+        let sub_parameter_len: u32 = sub_parameter.len()
+            .try_into()
+            .expect("parameter of transaction sub-command is too large");
+
+        let sub_data = self.subcmd.data();
+        let sub_data_len: u32 = sub_data.len()
+            .try_into()
+            .expect("data of transaction sub-command is too large");
+
+        // position of data relative to SMB header
+        let data_start = SMB_HEADER_LEN
+                       + 1 + 38 + sub_setup.len()
+                       + 2;
+
+        // sub parameter start at the first 32bit-aligned position in data
+        let sub_parameter_offset = 4 * ((data_start + 3)/4);
+        // sub data start at the next 32bit-aligned position after sub parameter
+        let sub_data_offset = 4 * ((sub_parameter_offset + sub_parameter.len() + 3)/4);
+
+
+
+        // parameter
+        parameter.put_u8(T::MAX_SETUP_COUNT);
+        parameter.put_u16_le(0);        // reserved
+
+        // the following are total counts, if mutiple transact messages
+        // are used to transfer this sub-command. we only send one message
+        // so this is the same as below.
+        parameter.put_u32_le(sub_parameter_len);
+        parameter.put_u32_le(sub_data_len);
+
+        // max parameter count accepted by client
+        parameter.put_u32_le(T::MAX_PARAM_COUNT);
+
+        // max data count accepted by client
+        parameter.put_u32_le(T::MAX_DATA_COUNT);
+
+        parameter.put_u32_le(sub_parameter_len);
+        parameter.put_u32_le(sub_parameter_offset.try_into().expect("sub_parameter_offset too big"));
+        parameter.put_u32_le(sub_data_len);
+        parameter.put_u32_le(sub_data_offset.try_into().expect("sub_data_offset too big"));
+        parameter.put_u8(sub_setup_words);
+        parameter.put_u16_le(T::ID);
+        parameter.put(sub_setup);
+
+
+        // data
+        data.put_bytes(0, (4 - (data_start % 4)) % 4);
+        data.put(sub_parameter);
+        data.put_bytes(0, (4 - (data_start + data.len()) % 4) % 4);
+        data.put(sub_data);
+    }
+
 }
 
 

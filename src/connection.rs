@@ -1,9 +1,10 @@
 use tokio::net::TcpStream;
 use bytes::Bytes;
 
+use crate::win::NotifyAction;
 use crate::{Error, Auth, smb, ntlm};
 use crate::netbios::NetBios;
-use crate::smb::{SmbOpts, msg, reply};
+use crate::smb::{SmbOpts, msg, reply, trans};
 use crate::smb::reply::{Share, FileHandle};
 
 
@@ -74,11 +75,18 @@ impl Cifs {
         Ok(())
     }
 
-    pub async fn open(&mut self, share: &Share, path: &str)
+    pub async fn openfile(&mut self, share: &Share, path: &str)
         -> Result<FileHandle, Error>
     {
         let filename = path.replace("/", "\\");
-        self.command(msg::OpenFile::ro(share.tid, filename)).await
+        self.command(msg::Open::file_ro(share.tid, filename)).await
+    }
+
+    pub async fn opendir(&mut self, share: &Share, path: &str)
+        -> Result<FileHandle, Error>
+    {
+        let filename = path.replace("/", "\\");
+        self.command(msg::Open::dir(share.tid, filename)).await
     }
 
     pub async fn close(&mut self, file: FileHandle) -> Result<(), Error> {
@@ -92,7 +100,7 @@ impl Cifs {
     }
 
     pub async fn download(&mut self, share: &Share, path: &str) -> Result<Vec<u8>, Error> {
-        let file = self.open(share, path).await?;
+        let file = self.openfile(share, path).await?;
 
         let mut data = Vec::new();
         while (data.len() as u64) < file.size {
@@ -102,6 +110,18 @@ impl Cifs {
 
         self.close(file).await?;
         Ok(data)
+    }
+
+    pub async fn notify(&mut self, handle: &FileHandle)
+        -> Result<Vec<(String, NotifyAction)>, Error>
+    {
+        let mode = trans::NotifyMode::all();
+        let recursive = false;
+        let subcmd = trans::NotifySetup::new(handle.fid, mode, recursive);
+        let msg = msg::Transact::new(handle.tid, subcmd);
+        let reply: reply::Transact<trans::NotifyResponse> = self.command(msg).await?;
+
+        Ok(reply.subcmd.changes)
     }
 
 
