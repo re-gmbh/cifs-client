@@ -81,6 +81,11 @@ impl Cifs {
         Ok(())
     }
 
+    pub async fn read(&mut self, file: &FileHandle, offset: u64) -> Result<Bytes, Error> {
+        let reply: reply::Read = self.command(msg::Read::handle(file, offset)).await?;
+        Ok(reply.data)
+    }
+
 
     //
     // private SMB functions
