@@ -29,8 +29,8 @@ pub trait Reply: Sized {
 }
 
 #[derive(Debug)]
-pub struct Negotiate {
-    pub dialect: &'static str,
+pub struct ServerSetup {
+    pub dialect: usize,
     pub security_mode: u8,
     pub max_mpx_count: u16,
     pub max_number_vcs: u16,
@@ -44,7 +44,7 @@ pub struct Negotiate {
     pub server_guid: Bytes,
 }
 
-impl Reply for Negotiate {
+impl Reply for ServerSetup {
     const CMD: RawCmd = RawCmd::Negotiate;
     const ANDX: bool = false;
 
@@ -58,12 +58,13 @@ impl Reply for Negotiate {
         }
 
         // this must always be here (0xffff means no supported dialects)
-        let index = parameter.get_u16_le() as usize;
-        if index == 0xffff {
+        let dialect = parameter.get_u16_le() as usize;
+        if dialect == 0xffff {
             return Err(Error::NoDialect);
         }
-        let dialect = SMB_SUPPORTED_DIALECTS.get(index)
-                                            .ok_or(Error::InvalidHeader)?;
+        if SMB_SUPPORTED_DIALECTS.get(dialect).is_none() {
+            return Err(Error::InvalidHeader);
+        }
 
 
         let security_mode = parameter.get_u8();
@@ -88,7 +89,7 @@ impl Reply for Negotiate {
         let server_guid = data.copy_to_bytes(16);
 
 
-        let reply = Negotiate {
+        let reply = Self {
             dialect,
             security_mode,
             max_mpx_count,
@@ -195,6 +196,23 @@ impl Reply for Share {
 }
 
 
+/// Reply for COM_TREE_DISCONNECT message
+pub struct TreeDisconnect {}
+
+impl Reply for TreeDisconnect {
+    const CMD: RawCmd = RawCmd::TreeDisconnect;
+    const ANDX: bool = false;
+
+    fn parse_param(_info: &Info, _parameter: Bytes, _data: Bytes)
+        -> Result<Self, Error>
+    {
+        Ok(Self {})
+    }
+}
+
+
+
+
 
 /// FileHandle is the struct returned by 'Create' SMB message
 #[derive(Debug)]
@@ -209,7 +227,7 @@ pub struct FileHandle {
     pub change_time: u64,
     pub attributes: ExtFileAttr,
     pub allocation_size: u64,
-    pub file_size: u64,
+    pub size: u64,
     pub file_type: ResourceType,
     pub directory: bool,
 }
@@ -233,7 +251,7 @@ impl Reply for FileHandle {
 
         let attributes = ExtFileAttr::from_bits_truncate(parameter.get_u32_le());
         let allocation_size = parameter.get_u64_le();
-        let file_size = parameter.get_u64_le();
+        let size = parameter.get_u64_le();
         let file_type = ResourceType::from_bits_truncate(parameter.get_u16_le());
 
         parameter.advance(2);       // ignore 2 byte pipe status
@@ -256,7 +274,7 @@ impl Reply for FileHandle {
             change_time,
             attributes,
             allocation_size,
-            file_size,
+            size,
             file_type,
             directory,
         };
@@ -394,7 +412,7 @@ mod tests {
                 "1100000310000100041100000000010000000000fde300808e6db6b79b3ed801"
                 "0000001000f9fe3c88bf27b444bd3d74f7b2fdbf01").as_ref()).freeze();
 
-        let reply = parse::<Negotiate>(buffer).expect("can't parse SMB blob");
+        let reply = parse::<ServerSetup>(buffer).expect("can't parse SMB blob");
 
         /*
         // check header infos
@@ -418,7 +436,7 @@ mod tests {
         */
 
         // check reply
-        assert_eq!(reply.dialect, "NT LM 0.12");
+        assert_eq!(reply.dialect, 0);
         assert_eq!(reply.security_mode, 3);
         assert_eq!(reply.max_mpx_count, 16);
         assert_eq!(reply.max_number_vcs, 1);

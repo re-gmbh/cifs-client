@@ -10,10 +10,12 @@ use crate::utils;
 use crate::win::NTStatus;
 
 
-pub const SMB_MAX_LEN: usize = 4096;
-pub const SMB_HEADER_LEN: usize = 32;
-pub const SMB_MAGIC: &[u8] = b"\xffSMB";
-pub const SMB_SUPPORTED_DIALECTS: &[&str] = &["NT LM 0.12"];
+pub(crate) const SMB_MAX_LEN: usize = 4096;
+pub(crate) const SMB_HEADER_LEN: usize = 32;
+pub(crate) const SMB_MAGIC: &[u8] = b"\xffSMB";
+pub(crate) const SMB_SUPPORTED_DIALECTS: &[&str] = &["NT LM 0.12"];
+pub(crate) const SMB_READ_MIN: u16 = 32768;
+pub(crate) const SMB_READ_MAX: u16 = 32768;
 
 
 
@@ -232,6 +234,7 @@ impl Status {
 pub enum RawCmd {
     Close = 0x04,
     Read = 0x2e,
+    TreeDisconnect = 0x71,
     Negotiate = 0x72,
     SessionSetup = 0x73,
     TreeConnect = 0x75,

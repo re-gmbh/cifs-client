@@ -11,7 +11,8 @@ pub trait Msg {
     const ANDX: bool;
 
     /// generate body for this smb message based on options
-    fn body(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut);
+    fn body(&self, _opts: &SmbOpts, _parameter: &mut BytesMut, _data: &mut BytesMut) {
+    }
 
     /// generate info data for header of this smb message based on options
     fn info(&self, opts: &SmbOpts) -> Info {
@@ -223,6 +224,31 @@ impl Msg for TreeConnect {
 }
 
 
+/// Parameter for COM_TREE_DISCONNECT message
+pub struct TreeDisconnect {
+    tid: u16,
+}
+
+impl TreeDisconnect {
+    pub fn new(tid: u16) -> Self {
+        Self {
+            tid,
+        }
+    }
+}
+
+impl Msg for TreeDisconnect {
+    const CMD: RawCmd = RawCmd::TreeDisconnect;
+    const ANDX: bool = false;
+
+    fn info(&self, opts: &SmbOpts) -> Info {
+        let mut info = Info::from_opts(opts);
+        info.tid = self.tid;
+        info
+    }
+}
+
+
 /// OpenFile defines the parameter for the 'Create' SMB message, which is used
 /// to open a new or existing file.
 pub struct OpenFile {
@@ -337,8 +363,6 @@ pub struct Read {
     tid: u16,
     fid: u16,
     offset: u64,
-    max: u16,
-    min: u16,
 }
 
 impl Read {
@@ -347,8 +371,6 @@ impl Read {
             tid,
             fid,
             offset,
-            max: 32768,
-            min: 32768,
         }
     }
 
@@ -371,8 +393,8 @@ impl Msg for Read {
         // parameter
         parameter.put_u16_le(self.fid);
         parameter.put_u32_le((self.offset & 0xffffffff) as u32);
-        parameter.put_u16_le(self.max);
-        parameter.put_u16_le(self.min);
+        parameter.put_u16_le(SMB_READ_MAX);
+        parameter.put_u16_le(SMB_READ_MIN);
 
         // the following is either higher bytes of max_count (file)
         // or a timeout in ms (pipe)

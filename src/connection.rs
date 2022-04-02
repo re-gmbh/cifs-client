@@ -25,11 +25,11 @@ impl Cifs {
 
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let negotiated_setup = self.smb_negotiate().await?;
+        let server_setup = self.smb_negotiate().await?;
 
         // update connection options based on what we learned
-        self.opts.max_smb_size = negotiated_setup.max_buffer_size as usize;
-        self.opts.unicode = negotiated_setup.capabilities.contains(smb::Capabilities::UNICODE);
+        self.opts.max_smb_size = server_setup.max_buffer_size as usize;
+        self.opts.unicode = server_setup.capabilities.contains(smb::Capabilities::UNICODE);
 
         let ntlm_init = {
             let mut ntlm_init_msg = ntlm::InitMsg::new(
@@ -69,10 +69,15 @@ impl Cifs {
         self.command(msg::TreeConnect::new(&normalized, password)).await
     }
 
-    pub async fn open_file(&mut self, share: &Share, name: &str)
+    pub async fn umount(&mut self, share: Share) -> Result<(), Error> {
+        let _: reply::TreeDisconnect = self.command(msg::TreeDisconnect::new(share.tid)).await?;
+        Ok(())
+    }
+
+    pub async fn open(&mut self, share: &Share, path: &str)
         -> Result<FileHandle, Error>
     {
-        let filename = name.replace("/", "\\");
+        let filename = path.replace("/", "\\");
         self.command(msg::OpenFile::ro(share.tid, filename)).await
     }
 
@@ -85,6 +90,20 @@ impl Cifs {
         let reply: reply::Read = self.command(msg::Read::handle(file, offset)).await?;
         Ok(reply.data)
     }
+
+    pub async fn download(&mut self, share: &Share, path: &str) -> Result<Vec<u8>, Error> {
+        let file = self.open(share, path).await?;
+
+        let mut data = Vec::new();
+        while (data.len() as u64) < file.size {
+            let chunk = self.read(&file, data.len() as u64).await?;
+            data.extend_from_slice(chunk.as_ref());
+        }
+
+        self.close(file).await?;
+        Ok(data)
+    }
+
 
 
     //
@@ -99,7 +118,7 @@ impl Cifs {
         reply::parse(self.netbios.read_frame().await?).map_err(|e| e.into())
     }
 
-    async fn smb_negotiate(&mut self) -> Result<reply::Negotiate, Error> {
+    async fn smb_negotiate(&mut self) -> Result<reply::ServerSetup, Error> {
         self.command(msg::Negotiate{}).await
     }
 
