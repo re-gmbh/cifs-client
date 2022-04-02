@@ -3,6 +3,7 @@ use bytes::{Bytes, Buf};
 use crate::utils;
 use crate::win::*;
 use super::common::*;
+use super::trans::TransReply;
 
 pub trait Reply: Sized {
     const CMD: RawCmd;
@@ -342,6 +343,69 @@ impl Reply for Read {
         Ok(read)
     }
 }
+
+/// Reply to SMB_COM_NT_TRANSACT
+pub struct Transact<T> {
+    pub subcmd: T,
+}
+
+impl<T: TransReply> Reply for Transact<T> {
+    const CMD: RawCmd = RawCmd::Transact;
+    const ANDX: bool = false;
+
+    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+        -> Result<Self, Error>
+    {
+        let parameter_len = parameter.len();
+
+        // parameter
+        parameter.advance(3);
+        let total_parameter_count = parameter.get_u32_le() as usize;
+        let total_data_count = parameter.get_u32_le() as usize;
+        let parameter_count = parameter.get_u32_le() as usize;
+        let _parameter_offset = parameter.get_u32_le();
+        let _parameter_displacement = parameter.get_u32_le();
+        let data_count = parameter.get_u32_le() as usize;
+        let _data_offset = parameter.get_u32_le();
+        let _data_displacement = parameter.get_u32_le();
+        let setup_words = parameter.get_u8() as usize;
+        let sub_setup = parameter.copy_to_bytes(2*setup_words);
+
+        if parameter_count < total_parameter_count || data_count < total_data_count {
+            return Err(Error::Unsupported("transaction message split to multiple packets".to_owned()));
+        }
+
+        // data
+        let data_start = SMB_HEADER_LEN + 1 + parameter_len + 2;
+
+
+        let sub_parameter = if parameter_count > 0 {
+            data.advance((4 - (data_start % 4)) % 4);
+            data.copy_to_bytes(parameter_count)
+        } else {
+            Bytes::new()
+        };
+
+        let sub_data = if data_count > 0 {
+            data.advance((4 - ((data_start + sub_parameter.len()) % 4)) % 4);
+            data.copy_to_bytes(data_count)
+        } else {
+            Bytes::new()
+        };
+
+        // create sub-command response
+        let subcmd = T::parse(sub_setup, sub_parameter, sub_data)?;
+
+        // create response
+        let response = Self {
+            subcmd,
+        };
+
+        Ok(response)
+    }
+}
+
+
 
 
 

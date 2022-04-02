@@ -15,7 +15,7 @@ pub(crate) const SMB_HEADER_LEN: usize = 32;
 pub(crate) const SMB_MAGIC: &[u8] = b"\xffSMB";
 pub(crate) const SMB_SUPPORTED_DIALECTS: &[&str] = &["NT LM 0.12"];
 pub(crate) const SMB_READ_MIN: u16 = 32768;
-pub(crate) const SMB_READ_MAX: u16 = 32768;
+pub(crate) const SMB_READ_MAX: u16 = 65534;
 
 
 
@@ -58,6 +58,12 @@ impl From<TryFromPrimitiveError<RawCmd>> for Error {
 
 impl From<FromUtf8Error> for Error {
     fn from(_err: FromUtf8Error) -> Self {
+        Error::InvalidData
+    }
+}
+
+impl From<std::char::DecodeUtf16Error> for Error {
+    fn from(_err: std::char::DecodeUtf16Error) -> Self {
         Error::InvalidData
     }
 }
@@ -238,6 +244,7 @@ pub enum RawCmd {
     Negotiate = 0x72,
     SessionSetup = 0x73,
     TreeConnect = 0x75,
+    Transact = 0xa0,
     Create = 0xa2,
     NoCommand = 0xff,
 }
