@@ -267,7 +267,6 @@ impl Reply for FileHandle {
 
 
 /// SMB Close Message (does not return anything)
-#[derive(Debug)]
 pub struct Close {}
 
 impl Reply for Close {
@@ -280,6 +279,52 @@ impl Reply for Close {
         Ok(Self {})
     }
 }
+
+
+/// reply to a SMB Read message
+pub struct Read {
+    pub data: Bytes,
+}
+
+impl Reply for Read {
+    const CMD: RawCmd = RawCmd::Read;
+    const ANDX: bool = true;
+
+
+    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+        -> Result<Self, Error>
+    {
+        // parameter
+        parameter.advance(2);   // available (only for pipes)
+        parameter.advance(2);   // data compaction (reserved, should be 0)
+        parameter.advance(2);   // more reserved
+
+        let length = parameter.get_u16_le() as usize;
+
+        // more reserved parameter...
+
+
+        // data
+
+        // skip 1 byte of optional padding
+        if data.remaining() > length {
+            data.advance(1);
+        }
+        // now everything should fit or we bail
+        if data.remaining() != length {
+            return Err(Error::InvalidData);
+        }
+
+        let file_data = data.copy_to_bytes(length);
+
+        let read = Read {
+            data: file_data,
+        };
+
+        Ok(read)
+    }
+}
+
 
 
 /// Parse buffer into a specific reply. This is our normal use case, because

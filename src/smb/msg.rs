@@ -310,7 +310,7 @@ impl Close {
     }
 
     pub fn handle(file: FileHandle) -> Self {
-        Close::new(file.tid, file.fid)
+        Self::new(file.tid, file.fid)
     }
 }
 
@@ -329,7 +329,60 @@ impl Msg for Close {
         // last time modified (0 means don't update)
         parameter.put_u32_le(0);
     }
+}
 
+
+/// Parameter for the SMB Read (0x2e) message
+pub struct Read {
+    tid: u16,
+    fid: u16,
+    offset: u64,
+    max: u16,
+    min: u16,
+}
+
+impl Read {
+    pub fn new(tid: u16, fid: u16, offset: u64) -> Self {
+        Self {
+            tid,
+            fid,
+            offset,
+            max: 32768,
+            min: 32768,
+        }
+    }
+
+    pub fn handle(file: &FileHandle, offset: u64) -> Self {
+        Self::new(file.tid, file.fid, offset)
+    }
+}
+
+impl Msg for Read {
+    const CMD: RawCmd = RawCmd::Read;
+    const ANDX: bool = true;
+
+    fn info(&self, opts: &SmbOpts) -> Info {
+        let mut info = Info::from_opts(opts);
+        info.tid = self.tid;
+        info
+    }
+
+    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, _data: &mut BytesMut) {
+        // parameter
+        parameter.put_u16_le(self.fid);
+        parameter.put_u32_le((self.offset & 0xffffffff) as u32);
+        parameter.put_u16_le(self.max);
+        parameter.put_u16_le(self.min);
+
+        // the following is either higher bytes of max_count (file)
+        // or a timeout in ms (pipe)
+        parameter.put_u32_le(0);
+
+        // 'remaining' bytes (ignored by modern dialects)
+        parameter.put_u16_le(0);
+
+        parameter.put_u32_le((self.offset >> 32) as u32);
+    }
 }
 
 
