@@ -6,7 +6,7 @@ use crate::win::*;
 use super::Error;
 use super::common::*;
 use super::info::*;
-use super::trans::TransReply;
+use super::subcmd::SubReply;
 
 pub trait Reply: Sized {
     const CMD: Cmd;
@@ -151,7 +151,17 @@ impl Reply for SessionSetup {
 }
 
 
-/// Share is the DataType returned by TreeConnect command
+/// Share is returned by TreeConnect command and represents a mounted
+/// SMB share.
+///
+/// Every further file operation needs such a Share to know in which filesystem
+/// it should operate. For example to generate a file or directory handle (see
+/// 'Handle' below) a Share must be given.
+/// (But Handle itself saves the neccassary information, so an operation
+/// using a Handle does not also need a Share.)
+///
+/// This type is given out to the user.
+///
 #[derive(Debug)]
 pub struct Share {
     pub access_rights: DirAccessMask,
@@ -217,10 +227,14 @@ impl Reply for TreeDisconnect {
 
 
 
-
-/// FileHandle is the struct returned by 'Create' SMB message
+/// Handle is the struct returned by 'Create' SMB message and represents
+/// an opened file or directory. File and directory opererations will
+/// need such a Handle to work.
+///
+/// This type is given out to the user.
+///
 #[derive(Debug)]
-pub struct FileHandle {
+pub struct Handle {
     pub tid: u16,
     pub fid: u16,
     pub oplock: OpLockLevel,
@@ -236,7 +250,7 @@ pub struct FileHandle {
     pub directory: bool,
 }
 
-impl Reply for FileHandle {
+impl Reply for Handle {
     const CMD: Cmd = Cmd::Create;
     const ANDX: bool = true;
 
@@ -288,7 +302,7 @@ impl Reply for FileHandle {
 }
 
 
-/// SMB Close Message (does not return anything)
+/// SMB_COM_CLOSE Message (does not contain any information).
 pub struct Close {}
 
 impl Reply for Close {
@@ -303,7 +317,7 @@ impl Reply for Close {
 }
 
 
-/// reply to a SMB Read message
+/// reply to SMB_COM_READ_ANDX message
 pub struct Read {
     pub data: Bytes,
 }
@@ -339,11 +353,7 @@ impl Reply for Read {
 
         let file_data = data.copy_to_bytes(length);
 
-        let read = Read {
-            data: file_data,
-        };
-
-        Ok(read)
+        Ok(Read { data: file_data })
     }
 }
 
@@ -352,7 +362,7 @@ pub struct Transact<T> {
     pub subcmd: T,
 }
 
-impl<T: TransReply> Reply for Transact<T> {
+impl<T: SubReply> Reply for Transact<T> {
     const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
@@ -399,12 +409,7 @@ impl<T: TransReply> Reply for Transact<T> {
         // create sub-command response
         let subcmd = T::parse(sub_setup, sub_parameter, sub_data)?;
 
-        // create response
-        let response = Self {
-            subcmd,
-        };
-
-        Ok(response)
+        Ok(Transact::<T> { subcmd })
     }
 }
 

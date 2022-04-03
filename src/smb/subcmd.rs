@@ -6,7 +6,7 @@ use crate::utils;
 use super::Error;
 
 /// Specification of a Subcommand that can be used in msg::Transact messages
-pub(crate) trait TransCmd {
+pub(crate) trait SubCmd {
     const ID: u16;
     const MAX_SETUP_COUNT: u8;
     const MAX_PARAM_COUNT: u32;
@@ -26,7 +26,7 @@ pub(crate) trait TransCmd {
     }
 }
 
-pub(crate) trait TransReply: Sized {
+pub(crate) trait SubReply: Sized {
     const ID: u16;
 
     fn parse(setup: Bytes, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
@@ -72,7 +72,7 @@ impl NotifySetup {
     }
 }
 
-impl TransCmd for NotifySetup {
+impl SubCmd for NotifySetup {
     const ID: u16 = 4;
     const MAX_SETUP_COUNT: u8 = 0;
     const MAX_PARAM_COUNT: u32 = 1000;
@@ -90,11 +90,11 @@ impl TransCmd for NotifySetup {
 
 /// Response to NT_TRANSACT_NOTIFY_CHANGE Subcommand, the format of the
 /// reply is documented in [MS-FSCC] section 2.4.42.
-pub(crate) struct NotifyResponse {
+pub(crate) struct Notification {
     pub changes: Vec<(String, NotifyAction)>,
 }
 
-impl NotifyResponse {
+impl Notification {
     /// Private method that helps parsing the
     fn parse_notify_info(mut buffer: Bytes) -> Result<(String, NotifyAction), Error> {
         if buffer.len() < 8 {
@@ -119,7 +119,7 @@ impl NotifyResponse {
 }
 
 
-impl TransReply for NotifyResponse {
+impl SubReply for Notification {
     const ID: u16 = 4;
 
     fn parse(_setup: Bytes, parameter: Bytes, _data: Bytes) -> Result<Self, Error> {

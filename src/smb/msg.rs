@@ -6,8 +6,8 @@ use crate::win::*;
 use super::Error;
 use super::common::*;
 use super::info::*;
-use super::reply::FileHandle;
-use super::trans::TransCmd;
+use super::reply::Handle;
+use super::subcmd::SubCmd;
 
 
 pub trait Msg {
@@ -367,7 +367,7 @@ impl Close {
         }
     }
 
-    pub fn handle(file: FileHandle) -> Self {
+    pub fn handle(file: Handle) -> Self {
         Self::new(file.tid, file.fid)
     }
 }
@@ -408,7 +408,7 @@ impl Read {
         }
     }
 
-    pub fn handle(file: &FileHandle, offset: u64) -> Self {
+    pub fn handle(file: &Handle, offset: u64) -> Self {
         Self::new(file.tid, file.fid, offset)
     }
 }
@@ -450,7 +450,7 @@ pub(crate) struct Transact<T> {
     subcmd: T,
 }
 
-impl<T: TransCmd> Transact<T> {
+impl<T: SubCmd> Transact<T> {
     pub(crate) fn new(tid: u16, subcmd: T) -> Self {
         Self {
             tid,
@@ -459,7 +459,7 @@ impl<T: TransCmd> Transact<T> {
     }
 }
 
-impl<T: TransCmd> Msg for Transact<T> {
+impl<T: SubCmd> Msg for Transact<T> {
     const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
@@ -561,12 +561,20 @@ mod tests {
             "4e544c4d5353500001000000978208e200000000000000000000000000000000"
             "0a00614a0000000f").as_ref());
 
+
+        let capabilities = Capabilities::UNICODE
+                         | Capabilities::NT_SMBS
+                         | Capabilities::NTSTATUS
+                         | Capabilities::LEVEL2_OPLOCKS
+                         | Capabilities::DYNAMIC_REAUTH
+                         | Capabilities::EXTENDED_SECURITY;
+
         let msg = SessionSetup {
             max_buffer_size: 4356,
             max_mpx_count: 16,
             vc_number: 0,
             session_key: 0,
-            capabilities: Capabilities::default(),
+            capabilities,
             security_blob: security_blob,
         };
 
