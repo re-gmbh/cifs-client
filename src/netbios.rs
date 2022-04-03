@@ -18,7 +18,7 @@ impl NetBios {
 
     pub async fn write_frame(&mut self, msg: Bytes) -> Result<(), Error> {
         if msg.len() > MAX_FRAME_LENGTH {
-            return Err(Error::InputParam("message too long for frame".to_owned()));
+            return Err(Error::InternalError("message too long for frame".to_owned()));
         }
 
         let n: u32 = msg.len().try_into()?;

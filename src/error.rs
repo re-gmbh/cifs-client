@@ -10,7 +10,7 @@ pub enum Error {
     IoError(std::io::Error),
     SMBError(smb::Error),
     NTLMError(ntlm::Error),
-    InputParam(String),
+    InternalError(String),
     InvalidFrameType(u8),
     InvalidFrame,
     UnexpectedEOF,
@@ -27,7 +27,7 @@ impl fmt::Display for Error {
             Error::IoError(what) => write!(f, "io error: {}", what),
             Error::SMBError(err) => write!(f, "protocol error: {}", err),
             Error::NTLMError(err) => write!(f, "NTLM error: {}", err),
-            Error::InputParam(what) => write!(f, "invalid input value: {}", what),
+            Error::InternalError(what) => write!(f, "internal error: {}", what),
             Error::InvalidFrameType(v) => write!(f, "invalid NetBIOS message type: {:02x}", v),
             Error::InvalidFrame => write!(f, "invalid NetBIOS frame"),
             Error::UnexpectedEOF => write!(f, "unexpected end of stream"),
@@ -41,8 +41,8 @@ impl fmt::Display for Error {
 }
 
 impl From<std::num::TryFromIntError> for Error {
-    fn from(_error: std::num::TryFromIntError) -> Self {
-        Error::InputParam("numeric conversion failed".to_owned())
+    fn from(err: std::num::TryFromIntError) -> Self {
+        Error::InternalError(format!("numeric conversion failed: {}", err))
     }
 }
 
