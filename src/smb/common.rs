@@ -38,20 +38,6 @@ bitflags! {
 
 }
 
-
-impl Capabilities {
-    pub fn default() -> Self {
-        Capabilities::UNICODE
-      | Capabilities::NT_SMBS
-      | Capabilities::NTSTATUS
-      | Capabilities::LEVEL2_OPLOCKS
-      | Capabilities::DYNAMIC_REAUTH
-      | Capabilities::EXTENDED_SECURITY
-    }
-}
-
-
-
 /// AndX is used by SMB to chain commands or replies
 pub struct AndX {
     pub cmd: Cmd,
