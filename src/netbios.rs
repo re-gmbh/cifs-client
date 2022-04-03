@@ -5,18 +5,18 @@ use crate::Error;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
 
-pub(crate) struct NetBios {
+pub struct NetBios {
     stream: TcpStream,
 }
 
 impl NetBios {
-    pub(crate) fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream) -> Self {
         Self {
             stream
         }
     }
 
-    pub(crate) async fn write_frame(&mut self, msg: Bytes) -> Result<(), Error> {
+    pub async fn write_frame(&mut self, msg: Bytes) -> Result<(), Error> {
         if msg.len() > MAX_FRAME_LENGTH {
             return Err(Error::InputParam("message too long for frame".to_owned()));
         }
@@ -36,26 +36,43 @@ impl NetBios {
         Ok(())
     }
 
-    pub(crate) async fn read_frame(&mut self) -> Result<Bytes, Error> {
-        // read NetBIOS message type
-        let msg_type = self.stream.read_u8().await?;
-        if msg_type != 0 {
-            return Err(Error::InvalidFrameType(msg_type));
-        }
-
-        // NetBIOS length is given by 3 bytes in big-endian
-        let mut raw_length = [0u8; 4];
-        self.stream.read_exact(&mut raw_length[1..4]).await?;
-        let n = u32::from_be_bytes(raw_length) as usize;
-        if n > MAX_FRAME_LENGTH {
-            return Err(Error::FrameTooBig);
-        }
+    pub async fn read_frame(&mut self) -> Result<Bytes, Error> {
+        let length = self.read_frame_header().await?;
 
         // now read the frame payload
-        let mut buffer = BytesMut::with_capacity(n);
-        self.read_exactly(&mut buffer, n).await?;
+        let mut buffer = BytesMut::with_capacity(length);
+        self.read_exactly(&mut buffer, length).await?;
 
         Ok(buffer.freeze())
+    }
+
+    async fn read_frame_header(&mut self) -> Result<usize, Error> {
+        loop {
+            // read NetBIOS message type
+            let msg_type = self.stream.read_u8().await?;
+            if msg_type != 0 && msg_type != 0x85 {
+                return Err(Error::InvalidFrameType(msg_type));
+            }
+
+            // NetBIOS length is given by 3 bytes in big-endian...
+            // (well, not really.. but good enough)
+            let mut raw_length = [0u8; 4];
+            self.stream.read_exact(&mut raw_length[1..4]).await?;
+            let length = u32::from_be_bytes(raw_length) as usize;
+
+            if length > MAX_FRAME_LENGTH {
+                return Err(Error::FrameTooBig);
+            }
+
+            if msg_type == 0x00 {
+                return Ok(length)
+            }
+
+            // keepalive with positive frame length is not allowed
+            if length > 0 {
+                return Err(Error::InvalidFrame);
+            }
+        }
     }
 
     async fn read_exactly(&mut self, buffer: &mut BytesMut, mut count: usize)
