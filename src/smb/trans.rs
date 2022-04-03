@@ -133,16 +133,12 @@ impl TransReply for NotifyResponse {
             }
 
             let next = parser.get_u32_le() as usize;
-
             changes.push(Self::parse_notify_info(parser)?);
 
             if next == 0 {
                 break;
             }
-            if next <= start || next >= parameter.len() {
-                return Err(Error::InvalidData);
-            }
-            start = next;
+            start += next;
         }
 
         Ok(Self { changes })
