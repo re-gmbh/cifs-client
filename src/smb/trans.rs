@@ -3,10 +3,9 @@ use bytes::{Bytes, Buf, BytesMut, BufMut};
 
 use crate::win::NotifyAction;
 use crate::utils;
-use super::common::Error;
+use super::Error;
 
-/// Specification of a Subcommand that can be used in the Transact message
-/// below
+/// Specification of a Subcommand that can be used in msg::Transact messages
 pub(crate) trait TransCmd {
     const ID: u16;
     const MAX_SETUP_COUNT: u8;
@@ -14,16 +13,16 @@ pub(crate) trait TransCmd {
     const MAX_DATA_COUNT: u32;
 
 
-    fn setup(&self) -> Bytes {
-        Bytes::new()
+    fn setup(&self) -> Result<Bytes, Error> {
+        Ok(Bytes::new())
     }
 
-    fn parameter(&self) -> Bytes {
-        Bytes::new()
+    fn parameter(&self) -> Result<Bytes, Error> {
+        Ok(Bytes::new())
     }
 
-    fn data(&self) -> Bytes {
-        Bytes::new()
+    fn data(&self) -> Result<Bytes, Error> {
+        Ok(Bytes::new())
     }
 }
 
@@ -35,7 +34,9 @@ pub(crate) trait TransReply: Sized {
 
 
 
-/// Notify Subcommand for Transact
+/// NT_TRANSACT_NOTIFY_CHANGE Subcommand for msg::Transact: This command notifies
+/// the client of anything that changed in the directory given by fid.
+/// The command is single-shot and must be resend for getting more changes.
 pub(crate) struct NotifySetup {
     fid: u16,
     recursive: bool,
@@ -77,17 +78,18 @@ impl TransCmd for NotifySetup {
     const MAX_PARAM_COUNT: u32 = 1000;
     const MAX_DATA_COUNT: u32 = 0;
 
-    fn setup(&self) -> Bytes {
+    fn setup(&self) -> Result<Bytes, Error> {
         let mut parameter = BytesMut::with_capacity(8);
         parameter.put_u32_le(self.mode.bits());
         parameter.put_u16_le(self.fid);
         parameter.put_u8(if self.recursive { 1 } else { 0 });
         parameter.put_u8(0);
-        parameter.freeze()
+        Ok(parameter.freeze())
     }
 }
 
-/// Response to Notify Subcommand
+/// Response to NT_TRANSACT_NOTIFY_CHANGE Subcommand, the format of the
+/// reply is documented in [MS-FSCC] section 2.4.42.
 pub(crate) struct NotifyResponse {
     pub changes: Vec<(String, NotifyAction)>,
 }

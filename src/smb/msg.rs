@@ -2,36 +2,34 @@ use bytes::{Bytes, BytesMut, BufMut};
 
 use crate::utils;
 use crate::win::*;
+
+use super::Error;
 use super::common::*;
+use super::info::*;
 use super::reply::FileHandle;
 use super::trans::TransCmd;
 
 
 pub trait Msg {
-    const CMD: RawCmd;
+    const CMD: Cmd;
     const ANDX: bool;
 
-    /// generate body for this smb message based on options
-    fn body(&self, _opts: &SmbOpts, _parameter: &mut BytesMut, _data: &mut BytesMut) {
+    /// Generate body for this SMB message based on given header info. This
+    /// is not intended to be called directly. Use write method below.
+    fn body(&self, _info: &Info, _parameter: &mut BytesMut, _data: &mut BytesMut)
+        -> Result<(), Error>
+    {
+        Ok(())
     }
 
-    /// generate info data for header of this smb message based on options
-    fn info(&self, opts: &SmbOpts) -> Info {
-        Info::from_opts(opts)
+    /// Fix header with information specific to this message.
+    fn fix_header(&self, _info: &mut Info) {
     }
 
-    /// give binary representation of this message
-    fn to_bytes(&self, opts: &SmbOpts) -> Result<Bytes, Error> {
-        let mut buffer = BytesMut::with_capacity(opts.max_smb_size);
-
-        // create info for this packet
-        let info = self.info(opts);
-
-        // write header
-        buffer.put(&SMB_MAGIC[..]);
-        buffer.put_u8(Self::CMD as u8);
-        info.write(&mut buffer);
-
+    /// Add binary representation of this message to given buffer. The SMB
+    /// header info is assumed to be already written and given here for
+    /// information only.
+    fn write(&self, info: &Info, buffer: &mut BytesMut) -> Result<(), Error> {
         // create space for package parameter and data
         let mut parameter = BytesMut::with_capacity(2*255);
         let mut data = BytesMut::with_capacity(SMB_MAX_LEN);
@@ -39,12 +37,12 @@ pub trait Msg {
         // we don't use AndX in our messages for now
         if Self::ANDX {
             AndX {
-                cmd: RawCmd::NoCommand,
+                cmd: Cmd::NoCommand,
                 offset: 0,
             }.write(&mut parameter);
         }
 
-        self.body(opts, &mut parameter, &mut data);
+        self.body(&info, &mut parameter, &mut data)?;
 
 
         // write package parameter
@@ -72,7 +70,7 @@ pub trait Msg {
         buffer.put_u16_le(data_len);
         buffer.put(data);
 
-        Ok(buffer.freeze())
+        Ok(())
     }
 }
 
@@ -82,15 +80,19 @@ pub trait Msg {
 pub struct Negotiate {}
 
 impl Msg for Negotiate {
-    const CMD: RawCmd = RawCmd::Negotiate;
+    const CMD: Cmd = Cmd::Negotiate;
     const ANDX: bool = false;
 
-    fn body(&self, _opts: &SmbOpts, _parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, _info: &Info, _parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
         for dialect in SMB_SUPPORTED_DIALECTS {
             data.put_u8(0x02);
             data.put(dialect.as_bytes());
             data.put_u8(0x00);
         }
+
+        Ok(())
     }
 }
 
@@ -127,15 +129,18 @@ impl SessionSetup {
 }
 
 impl Msg for SessionSetup {
-    const CMD: RawCmd = RawCmd::SessionSetup;
+    const CMD: Cmd = Cmd::SessionSetup;
     const ANDX: bool = true;
 
-    fn body(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
         // safety
         let blob_len: u16 = self.security_blob
-                                .len()
-                                .try_into()
-                                .expect("security_blob in SessionSetup is to big");
+            .len()
+            .try_into()
+            .map_err(|_| Error::CreatePackage("security_blob in SessionSetup is too big".to_owned()))?;
+
         // parameter
         parameter.put_u16_le(self.max_buffer_size);
         parameter.put_u16_le(self.max_mpx_count);
@@ -148,7 +153,7 @@ impl Msg for SessionSetup {
         // data
         data.put(self.security_blob.as_ref());
 
-        if opts.unicode {
+        if info.flags2.contains(Flags2::UNICODE) {
             // 16bit alignment pad for unicode
             if self.security_blob.len() % 2 == 0 {
                 data.put_u8(0);
@@ -158,6 +163,8 @@ impl Msg for SessionSetup {
         } else {
             data.put_bytes(0, 2);
         }
+
+        Ok(())
     }
 }
 
@@ -184,10 +191,12 @@ impl TreeConnect {
 }
 
 impl Msg for TreeConnect {
-    const CMD: RawCmd = RawCmd::TreeConnect;
+    const CMD: Cmd = Cmd::TreeConnect;
     const ANDX: bool = true;
 
-    fn body(&self, opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
         // normalize password: if none is given replace it with a single binary zero
         let password = if self.password.len() > 0 {
             self.password.as_bytes()
@@ -195,9 +204,10 @@ impl Msg for TreeConnect {
             &b"\x00"[..]
         };
 
-        let password_length: u16 = password.len()
-                                           .try_into()
-                                           .expect("password too long");
+        let password_length: u16 = password
+            .len()
+            .try_into()
+            .map_err(|_| Error::CreatePackage("password too long".to_owned()))?;
 
         // parameter
         parameter.put_u16_le(self.flags.bits());
@@ -206,7 +216,7 @@ impl Msg for TreeConnect {
         // data
         data.put(password);
 
-        if opts.unicode {
+        if info.flags2.contains(Flags2::UNICODE) {
             // 16bith alignment padding
             if password.len() % 2 == 0 {
                 data.put_u8(0);
@@ -222,6 +232,8 @@ impl Msg for TreeConnect {
         // zero-terminated name of service ('?????' matches anything)
         data.put_bytes(0x3f, 5);
         data.put_u8(0);
+
+        Ok(())
     }
 }
 
@@ -240,13 +252,11 @@ impl TreeDisconnect {
 }
 
 impl Msg for TreeDisconnect {
-    const CMD: RawCmd = RawCmd::TreeDisconnect;
+    const CMD: Cmd = Cmd::TreeDisconnect;
     const ANDX: bool = false;
 
-    fn info(&self, opts: &SmbOpts) -> Info {
-        let mut info = Info::from_opts(opts);
+    fn fix_header(&self, info: &mut Info)  {
         info.tid = self.tid;
-        info
     }
 }
 
@@ -305,19 +315,20 @@ impl Open {
 }
 
 impl Msg for Open {
-    const CMD: RawCmd = RawCmd::Create;
+    const CMD: Cmd = Cmd::Create;
     const ANDX: bool = true;
 
-    /// generate info data for header of this smb message based on options
-    fn info(&self, opts: &SmbOpts) -> Info {
-        let mut info = Info::from_opts(opts);
+    fn fix_header(&self, info: &mut Info)  {
         info.tid = self.tid;
-
-        info
     }
 
-    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
-        let filename_length: u16 = self.filename.len().try_into().expect("filename too long");
+    fn body(&self, _info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
+        let filename_length: u16 = self.filename
+            .len()
+            .try_into()
+            .map_err(|_| Error::CreatePackage("filename too long".to_owned()))?;
 
         // parameter
         parameter.put_u8(0);    // reserved
@@ -336,6 +347,8 @@ impl Msg for Open {
         // data
         data.put_u8(0); // alignment padding
         data.put(utils::encode_utf16le_0(&self.filename).as_ref());
+
+        Ok(())
     }
 }
 
@@ -360,19 +373,21 @@ impl Close {
 }
 
 impl Msg for Close {
-    const CMD: RawCmd = RawCmd::Close;
+    const CMD: Cmd = Cmd::Close;
     const ANDX: bool = false;
 
-    fn info(&self, opts: &SmbOpts) -> Info {
-        let mut info = Info::from_opts(opts);
+    fn fix_header(&self, info: &mut Info)  {
         info.tid = self.tid;
-        info
     }
 
-    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, _data: &mut BytesMut) {
+    fn body(&self, _info: &Info, parameter: &mut BytesMut, _data: &mut BytesMut)
+        -> Result<(), Error>
+    {
         parameter.put_u16_le(self.fid);
         // last time modified (0 means don't update)
         parameter.put_u32_le(0);
+
+        Ok(())
     }
 }
 
@@ -399,16 +414,16 @@ impl Read {
 }
 
 impl Msg for Read {
-    const CMD: RawCmd = RawCmd::Read;
+    const CMD: Cmd = Cmd::Read;
     const ANDX: bool = true;
 
-    fn info(&self, opts: &SmbOpts) -> Info {
-        let mut info = Info::from_opts(opts);
+    fn fix_header(&self, info: &mut Info)  {
         info.tid = self.tid;
-        info
     }
 
-    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, _data: &mut BytesMut) {
+    fn body(&self, _info: &Info, parameter: &mut BytesMut, _data: &mut BytesMut)
+        -> Result<(), Error>
+    {
         // parameter
         parameter.put_u16_le(self.fid);
         parameter.put_u32_le((self.offset & 0xffffffff) as u32);
@@ -423,6 +438,8 @@ impl Msg for Read {
         parameter.put_u16_le(0);
 
         parameter.put_u32_le((self.offset >> 32) as u32);
+
+        Ok(())
     }
 }
 
@@ -443,31 +460,31 @@ impl<T: TransCmd> Transact<T> {
 }
 
 impl<T: TransCmd> Msg for Transact<T> {
-    const CMD: RawCmd = RawCmd::Transact;
+    const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
-    fn info(&self, opts: &SmbOpts) -> Info {
-        let mut info = Info::from_opts(opts);
+    fn fix_header(&self, info: &mut Info)  {
         info.tid = self.tid;
-        info
     }
 
-    fn body(&self, _opts: &SmbOpts, parameter: &mut BytesMut, data: &mut BytesMut) {
+    fn body(&self, _info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
         // serialize sub command
-        let sub_setup = self.subcmd.setup();
+        let sub_setup = self.subcmd.setup()?;
         let sub_setup_words: u8 = (sub_setup.len() / 2)
             .try_into()
-            .expect("setup of transaction sub-command is too large");
+            .map_err(|_| Error::CreatePackage("setup of transaction sub-command is too large".to_owned()))?;
 
-        let sub_parameter = self.subcmd.parameter();
+        let sub_parameter = self.subcmd.parameter()?;
         let sub_parameter_len: u32 = sub_parameter.len()
             .try_into()
-            .expect("parameter of transaction sub-command is too large");
+            .map_err(|_| Error::CreatePackage("parameter of transaction sub-command is too large".to_owned()))?;
 
-        let sub_data = self.subcmd.data();
+        let sub_data = self.subcmd.data()?;
         let sub_data_len: u32 = sub_data.len()
             .try_into()
-            .expect("data of transaction sub-command is too large");
+            .map_err(|_| Error::CreatePackage("data of transaction sub-command is too large".to_owned()))?;
 
         // position of data relative to SMB header
         let data_start = SMB_HEADER_LEN
@@ -511,6 +528,8 @@ impl<T: TransCmd> Msg for Transact<T> {
         data.put(sub_parameter);
         data.put_bytes(0, (4 - (data_start + data.len()) % 4) % 4);
         data.put(sub_data);
+
+        Ok(())
     }
 
 }
@@ -523,18 +542,21 @@ mod tests {
 
     #[test]
     fn create_negotiate() {
+        let mut buffer = BytesMut::with_capacity(SMB_MAX_LEN);
+
         let msg = Negotiate {};
-        let package = msg.to_bytes(&SmbOpts::default())
+        let info = Info::default(Negotiate::CMD);
+
+        msg.write(&info, &mut buffer)
             .expect("can't create negotiate package");
 
-        assert_eq!(&package[..], hex!(
-            "ff534d4272000000001843c8000000000000000000000000fffffffe00000000"
-            "000c00024e54204c4d20302e313200"));
+        assert_eq!(buffer.as_ref(), hex!("000c00024e54204c4d20302e313200"));
     }
 
 
     #[test]
     fn create_session_setup() {
+
         let security_blob = Bytes::from(hex!(
             "4e544c4d5353500001000000978208e200000000000000000000000000000000"
             "0a00614a0000000f").as_ref());
@@ -548,12 +570,13 @@ mod tests {
             security_blob: security_blob,
         };
 
-        let opts = SmbOpts::default();
-        let package = msg.to_bytes(&opts)
-                         .expect("can't create SessionSetup package");
+        let mut buffer = BytesMut::with_capacity(SMB_MAX_LEN);
+        let info = Info::default(SessionSetup::CMD);
 
-        assert_eq!(&package[..], hex!(
-            "ff534d4273000000001843c8000000000000000000000000fffffffe00000000"
+        msg.write(&info, &mut buffer)
+            .expect("can't create SessionSetup package");
+
+        assert_eq!(buffer.as_ref(), hex!(
             "0cff00000004111000000000000000280000000000d40000a02d004e544c4d53"
             "53500001000000978208e2000000000000000000000000000000000a00614a00"
             "00000f0000000000"));

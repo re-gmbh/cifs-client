@@ -2,16 +2,19 @@ use bytes::{Bytes, Buf};
 
 use crate::utils;
 use crate::win::*;
+
+use super::Error;
 use super::common::*;
+use super::info::*;
 use super::trans::TransReply;
 
 pub trait Reply: Sized {
-    const CMD: RawCmd;
+    const CMD: Cmd;
     const ANDX: bool;
 
     fn parse_param(info: &Info, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
 
-    fn parse(info: &Info, buffer: &mut Bytes) -> Result<Self, Error> {
+    fn parse(info: &Info, mut buffer: Bytes) -> Result<Self, Error> {
         let parameter_count = buffer.get_u8() as usize;
         let mut parameter = buffer.copy_to_bytes(2*parameter_count);
 
@@ -46,7 +49,7 @@ pub struct ServerSetup {
 }
 
 impl Reply for ServerSetup {
-    const CMD: RawCmd = RawCmd::Negotiate;
+    const CMD: Cmd = Cmd::Negotiate;
     const ANDX: bool = false;
 
     fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
@@ -119,7 +122,7 @@ pub struct SessionSetup {
 }
 
 impl Reply for SessionSetup {
-    const CMD: RawCmd = RawCmd::SessionSetup;
+    const CMD: Cmd = Cmd::SessionSetup;
     const ANDX: bool = true;
 
     fn parse_param(info: &Info, mut parameter: Bytes, mut data: Bytes)
@@ -160,7 +163,7 @@ pub struct Share {
 
 
 impl Reply for Share {
-    const CMD: RawCmd = RawCmd::TreeConnect;
+    const CMD: Cmd = Cmd::TreeConnect;
     const ANDX: bool = true;
 
     fn parse_param(info: &Info, mut parameter: Bytes, mut data: Bytes)
@@ -201,7 +204,7 @@ impl Reply for Share {
 pub struct TreeDisconnect {}
 
 impl Reply for TreeDisconnect {
-    const CMD: RawCmd = RawCmd::TreeDisconnect;
+    const CMD: Cmd = Cmd::TreeDisconnect;
     const ANDX: bool = false;
 
     fn parse_param(_info: &Info, _parameter: Bytes, _data: Bytes)
@@ -234,7 +237,7 @@ pub struct FileHandle {
 }
 
 impl Reply for FileHandle {
-    const CMD: RawCmd = RawCmd::Create;
+    const CMD: Cmd = Cmd::Create;
     const ANDX: bool = true;
 
     fn parse_param(info: &Info, mut parameter: Bytes, _data: Bytes)
@@ -289,7 +292,7 @@ impl Reply for FileHandle {
 pub struct Close {}
 
 impl Reply for Close {
-    const CMD: RawCmd = RawCmd::Close;
+    const CMD: Cmd = Cmd::Close;
     const ANDX: bool = false;
 
     fn parse_param(_info: &Info, _parameter: Bytes, _data: Bytes)
@@ -306,7 +309,7 @@ pub struct Read {
 }
 
 impl Reply for Read {
-    const CMD: RawCmd = RawCmd::Read;
+    const CMD: Cmd = Cmd::Read;
     const ANDX: bool = true;
 
 
@@ -350,7 +353,7 @@ pub struct Transact<T> {
 }
 
 impl<T: TransReply> Reply for Transact<T> {
-    const CMD: RawCmd = RawCmd::Transact;
+    const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
     fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
@@ -407,62 +410,6 @@ impl<T: TransReply> Reply for Transact<T> {
 
 
 
-
-
-/// Parse buffer into a specific reply. This is our normal use case, because
-/// after sending a command we expect a response to this specific command.
-///
-/// On the other hand CIFS is free to send any response it likes (ie out of order,
-/// or multiple responses chained together, ...), so this is not the most robust
-/// approach.
-pub(crate) fn parse<T: Reply>(mut buffer: Bytes) -> Result<T, Error> {
-    // check if we have at least our SMB header?
-    if buffer.remaining() < SMB_HEADER_LEN {
-        return Err(Error::InvalidHeader);
-    }
-
-    // check magic
-    let magic = buffer.copy_to_bytes(4);
-    if &magic[..] != SMB_MAGIC {
-        return Err(Error::InvalidHeader);
-    }
-
-    // check command identifier
-    let cmd: RawCmd = buffer.get_u8().try_into()?;
-    if cmd != T::CMD {
-        return Err(Error::UnexpectedReply(T::CMD, cmd));
-    }
-
-    // info part of header
-    let info = Info::parse(&mut buffer)?;
-
-    // check status
-    match info.status {
-        Status::Known(NTStatus::SUCCESS) => (),
-        Status::Known(NTStatus::MORE_PROCESSING) => (),
-
-        _ => return Err(Error::ServerError(info.status)),
-    }
-
-    // this must be a reply
-    if !info.flags1.contains(Flags1::REPLY) {
-        return Err(Error::ReplyExpected);
-    }
-
-    // if extended_security is not set, we have to parse
-    // negotiate reply differently... until we support that
-    // throw an error
-    if !info.flags2.contains(Flags2::EXTENDED_SECURITY) {
-        return Err(Error::NeedSecurityExt);
-    }
-
-    // finally parse the expected package
-    let reply = T::parse(&info, &mut buffer)?;
-
-    Ok(reply)
-}
-
-
 #[cfg(test)]
 mod tests {
     use bytes::BytesMut;
@@ -470,34 +417,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_negotiate_cmd() {
+    fn parse_negotiate() {
         let buffer = BytesMut::from(hex!(
-                "ff534d4272000000009853c8000000000000000000000000fffffffe00000000"
                 "1100000310000100041100000000010000000000fde300808e6db6b79b3ed801"
                 "0000001000f9fe3c88bf27b444bd3d74f7b2fdbf01").as_ref()).freeze();
 
-        let reply = parse::<ServerSetup>(buffer).expect("can't parse SMB blob");
+        // makeup header info, since parsing may depend on that data
+        let info = Info::default(Cmd::Negotiate);
 
-        /*
-        // check header infos
-        assert_eq!(info.status, Status::Known(NTStatus::SUCCESS));
-        assert_eq!(info.flags1, Flags1::REPLY
-                              | Flags1::CASE_INSENSITIVE
-                              | Flags1::CANONICAL_PATHS);
-
-        assert_eq!(info.flags2, Flags2::UNICODE
-                              | Flags2::NTSTATUS
-                              | Flags2::EXTENDED_SECURITY
-                              | Flags2::LONG_NAMES_USED
-                              | Flags2::SIGNATURE_REQUIRED
-                              | Flags2::EAS
-                              | Flags2::LONG_NAMES_ALLOWED);
-
-        assert_eq!(info.pid, 65279);
-        assert_eq!(info.tid, 0xffff);
-        assert_eq!(info.uid, 0);
-        assert_eq!(info.mid, 0);
-        */
+        // Negotiate returns a ServerSetup
+        let reply = ServerSetup::parse(&info, buffer)
+            .expect("can't parse negotiate body");
 
         // check reply
         assert_eq!(reply.dialect, 0);
@@ -526,26 +456,25 @@ mod tests {
         assert_eq!(&reply.server_guid[..], hex!("f9fe3c88bf27b444bd3d74f7b2fdbf01"));
     }
 
+
     #[test]
     fn parse_session_setup() {
-        let blob = hex!("ff534d4273160000c09807c8000000000000000000000000"
-                        "fffffffe0008200004ff002d010000b80002014e544c4d53"
-                        "53500002000000140014003800000015828ae2d9102a72d8"
-                        "b439d200000000000000006c006c004c0000000501280a00"
-                        "00000f4b0049004500460045004c002d0049005000430002"
-                        "0014004b0049004500460045004c002d0049005000430001"
-                        "0014004b0049004500460045004c002d0049005000430004"
-                        "0014004b0049004500460045004c002d0049005000430003"
-                        "0014004b0049004500460045004c002d0049005000430006"
-                        "000400010000000000000000570069006e0064006f007700"
-                        "7300200035002e0031000000570069006e0064006f007700"
-                        "73002000320030003000300020004c0041004e0020004d00"
-                        "61006e00610067006500720000");
-
+        let blob = hex!(
+            "04ff002d010000b80002014e544c4d5353500002000000140014003800000015"
+            "828ae2d9102a72d8b439d200000000000000006c006c004c0000000501280a00"
+            "00000f4b0049004500460045004c002d00490050004300020014004b00490045"
+            "00460045004c002d00490050004300010014004b0049004500460045004c002d"
+            "00490050004300040014004b0049004500460045004c002d0049005000430003"
+            "0014004b0049004500460045004c002d00490050004300060004000100000000"
+            "00000000570069006e0064006f0077007300200035002e003100000057006900"
+            "6e0064006f00770073002000320030003000300020004c0041004e0020004d00"
+            "61006e00610067006500720000");
 
         let buffer = BytesMut::from(&blob[..]).freeze();
 
-        let reply = parse::<SessionSetup>(buffer).expect("can't parse SMB blob");
+        let info = Info::default(Cmd::Negotiate);
+        let reply = SessionSetup::parse(&info, buffer)
+            .expect("can't parse SessionSetup");
 
         assert_eq!(reply.guest_mode, false);
         assert_eq!(reply.security_blob.as_ref(), hex!(

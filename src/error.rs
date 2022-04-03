@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::smb;
 use crate::ntlm;
+use crate::smb::info::{Status, Cmd};
 
 
 #[derive(Debug)]
@@ -13,8 +14,10 @@ pub enum Error {
     InvalidFrameType(u8),
     UnexpectedEOF,
     FrameTooBig,
-    UnexpectedReply,
+    UnexpectedReply(Cmd, Cmd),
     TooManyReplies(usize),
+    ServerError(Status),
+    Unsupported(String),
 }
 
 impl fmt::Display for Error {
@@ -27,8 +30,10 @@ impl fmt::Display for Error {
             Error::InvalidFrameType(v) => write!(f, "invalid NetBIOS message type: {:02x}", v),
             Error::UnexpectedEOF => write!(f, "unexpected end of stream"),
             Error::FrameTooBig => write!(f, "frame exceeds maximal size"),
-            Error::UnexpectedReply => write!(f, "unexpected SMB reply"),
+            Error::UnexpectedReply(want,got) => write!(f, "unexpected reply, want: {:?}, got: {:?}", want, got),
             Error::TooManyReplies(num) => write!(f, "we expect one reply but got {}", num),
+            Error::ServerError(status) => write!(f, "server reports error: {}", status),
+            Error::Unsupported(what) => write!(f, "unsupported feature: {}", what),
         }
     }
 }
