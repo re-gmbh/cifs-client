@@ -1,17 +1,22 @@
 use tokio::net::TcpStream;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
-use crate::win::NotifyAction;
-use crate::{Error, Auth, smb, ntlm};
+use crate::{Error, Auth};
+use crate::win::{NotifyAction, NTStatus};
 use crate::netbios::NetBios;
-use crate::smb::{SmbOpts, msg, reply, trans};
+use crate::ntlm;
+use crate::smb::info::*;
+use crate::smb::{msg, reply, trans, Capabilities};
 use crate::smb::reply::{Share, FileHandle};
 
 
 pub struct Cifs {
     netbios: NetBios,
     auth: Auth,
-    opts: SmbOpts,
+
+    max_smb_size: usize,
+    use_unicode: bool,
+    uid: u16,
 }
 
 
@@ -20,17 +25,20 @@ impl Cifs {
         Cifs {
             netbios: NetBios::new(stream),
             auth,
-            opts: SmbOpts::default(),
+
+            max_smb_size: 1024,
+            use_unicode: true,
+            uid: 0,
         }
     }
 
 
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let server_setup = self.smb_negotiate().await?;
+        let server_setup = self.negotiate().await?;
 
         // update connection options based on what we learned
-        self.opts.max_smb_size = server_setup.max_buffer_size as usize;
-        self.opts.unicode = server_setup.capabilities.contains(smb::Capabilities::UNICODE);
+        self.max_smb_size = server_setup.max_buffer_size as usize;
+        self.use_unicode = server_setup.capabilities.contains(Capabilities::UNICODE);
 
         let ntlm_init = {
             let mut ntlm_init_msg = ntlm::InitMsg::new(
@@ -46,15 +54,15 @@ impl Cifs {
             ntlm_init_msg.to_bytes()?
         };
 
-        let setup_reply = self.smb_session_setup(ntlm_init).await?;
+        let setup_reply = self.session_setup(ntlm_init).await?;
 
         // take over uid the server gave us
-        self.opts.uid = setup_reply.uid;
+        self.uid = setup_reply.uid;
 
         // try to parse security blob into ntlm challenge and calculate response
         let ntlm_challenge = ntlm::ChallengeMsg::parse(&setup_reply.security_blob)?;
         let ntlm_response = ntlm_challenge.response(&self.auth)?;
-        let _ = self.smb_session_setup(ntlm_response).await?;
+        let _ = self.session_setup(ntlm_response).await?;
 
         Ok(())
     }
@@ -127,22 +135,70 @@ impl Cifs {
 
 
     //
-    // private SMB functions
+    // private functions
     //
+
+    /// Sends a generic message M and expects result generic R. There is no
+    /// check that M and R "fit" together (like M::CMD == R::CMD), so this
+    /// is clearly not meant to be a public method.
+    /// We built safe wrapper around command, with correct message and reply
+    /// types.
     async fn command<M,R>(&mut self, msg: M) -> Result<R, Error>
     where
         M: msg::Msg,
         R: reply::Reply,
     {
-        self.netbios.write_frame(msg.to_bytes(&self.opts)?).await?;
-        reply::parse(self.netbios.read_frame().await?).map_err(|e| e.into())
+        let mut frame_out = BytesMut::with_capacity(self.max_smb_size);
+
+        // create and write SMB header
+        let mut info = Info::default(M::CMD);
+        info.uid = self.uid;
+        info.flags2.set(Flags2::UNICODE, self.use_unicode);
+        msg.fix_header(&mut info);
+        info.write(&mut frame_out);
+
+        // add message body to frame and send it
+        msg.write(&info, &mut frame_out)?;
+        self.netbios.write_frame(frame_out.freeze()).await?;
+
+        let mut frame_in = self.netbios.read_frame().await?;
+
+        // first parse header and check it
+        let info = Info::parse(&mut frame_in)?;
+
+        // check command identifier
+        if info.cmd != R::CMD {
+            return Err(Error::UnexpectedReply(R::CMD, info.cmd));
+        }
+
+        // check status
+        if let Status::Known(status) = info.status {
+            match status {
+                NTStatus::SUCCESS => (),
+                NTStatus::MORE_PROCESSING if info.cmd == Cmd::SessionSetup => (),
+
+                _ => return Err(Error::ServerError(info.status)),
+            }
+        } else {
+            return Err(Error::ServerError(info.status));
+        }
+
+        // if extended_security is not set, we have to parse
+        // negotiate reply differently. until we support that
+        // we throw an error...
+        if !info.flags2.contains(Flags2::EXTENDED_SECURITY) {
+            return Err(Error::Unsupported("reply without extended security".to_owned()));
+        }
+
+        // finally parse the response body into our desired result
+        R::parse(&info, frame_in).map_err(|e| e.into())
     }
 
-    async fn smb_negotiate(&mut self) -> Result<reply::ServerSetup, Error> {
+    async fn negotiate(&mut self) -> Result<reply::ServerSetup, Error> {
         self.command(msg::Negotiate{}).await
     }
 
-    async fn smb_session_setup(&mut self, blob: Bytes)
+    async fn session_setup(&mut self, blob: Bytes)
         -> Result<reply::SessionSetup, Error>
     {
         self.command(msg::SessionSetup::new(blob)).await
