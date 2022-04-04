@@ -18,6 +18,7 @@ pub use ntlm::Auth;
 pub use crate::smb::reply::{Share, Handle};
 
 
+#[derive(Debug)]
 pub struct Cifs {
     netbios: NetBios,
     auth: Auth,
