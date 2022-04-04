@@ -1,0 +1,11 @@
+image: rust:1.58-buster
+
+run tests:
+  interruptible: true
+
+  cache:
+    paths:
+      - target
+
+  script:
+    - cargo test
