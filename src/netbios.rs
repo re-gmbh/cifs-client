@@ -5,6 +5,7 @@ use crate::Error;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
 
+#[derive(Debug)]
 pub struct NetBios {
     stream: TcpStream,
 }
