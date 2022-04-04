@@ -95,7 +95,6 @@ pub(crate) struct Notification {
 }
 
 impl Notification {
-    /// Private method that helps parsing the
     fn parse_notify_info(mut buffer: Bytes) -> Result<(String, NotifyAction), Error> {
         if buffer.len() < 8 {
             return Err(Error::InvalidData);
