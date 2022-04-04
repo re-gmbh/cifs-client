@@ -6,7 +6,7 @@ use crate::utils;
 use super::Error;
 
 /// Specification of a Subcommand that can be used in msg::Transact messages
-pub(crate) trait SubCmd {
+pub trait SubCmd {
     const ID: u16;
     const MAX_SETUP_COUNT: u8;
     const MAX_PARAM_COUNT: u32;
@@ -26,7 +26,7 @@ pub(crate) trait SubCmd {
     }
 }
 
-pub(crate) trait SubReply: Sized {
+pub trait SubReply: Sized {
     const ID: u16;
 
     fn parse(setup: Bytes, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
@@ -37,7 +37,7 @@ pub(crate) trait SubReply: Sized {
 /// NT_TRANSACT_NOTIFY_CHANGE Subcommand for msg::Transact: This command notifies
 /// the client of anything that changed in the directory given by fid.
 /// The command is single-shot and must be resend for getting more changes.
-pub(crate) struct NotifySetup {
+pub struct NotifySetup {
     fid: u16,
     recursive: bool,
     mode: NotifyMode,
@@ -90,7 +90,7 @@ impl SubCmd for NotifySetup {
 
 /// Response to NT_TRANSACT_NOTIFY_CHANGE Subcommand, the format of the
 /// reply is documented in [MS-FSCC] section 2.4.42.
-pub(crate) struct Notification {
+pub struct Notification {
     pub changes: Vec<(String, NotifyAction)>,
 }
 
