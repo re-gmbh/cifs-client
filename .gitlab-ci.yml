@@ -1,4 +1,4 @@
-image: rust:1.58-buster
+image: rust:1.59-buster
 
 run tests:
   interruptible: true
