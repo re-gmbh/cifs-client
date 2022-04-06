@@ -26,6 +26,7 @@ pub struct Cifs {
     max_smb_size: usize,
     use_unicode: bool,
     uid: u16,
+    mid: u16,
 }
 
 
@@ -38,6 +39,7 @@ impl Cifs {
             max_smb_size: 1024,
             use_unicode: true,
             uid: 0,
+            mid: 0,
         }
     }
 
@@ -159,9 +161,14 @@ impl Cifs {
     {
         let mut frame_out = BytesMut::with_capacity(self.max_smb_size);
 
+        // allocate a multiplex id
+        let mid = self.mid;
+        self.mid += 1;
+
         // create and write SMB header
         let mut info = Info::default(M::CMD);
         info.uid = self.uid;
+        info.mid = mid;
         info.flags2.set(Flags2::UNICODE, self.use_unicode);
         msg.fix_header(&mut info);
         info.write(&mut frame_out);
@@ -170,10 +177,14 @@ impl Cifs {
         msg.write(&info, &mut frame_out)?;
         self.netbios.write_frame(frame_out.freeze()).await?;
 
-        let mut frame_in = self.netbios.read_frame().await?;
-
-        // first parse header and check it
-        let info = Info::parse(&mut frame_in)?;
+        // wait for a frame with the correct mid
+        let (info, frame_in) = loop {
+            let mut frame = self.netbios.read_frame().await?;
+            let info = Info::parse(&mut frame)?;
+            if info.mid == mid {
+                break (info, frame);
+            }
+        };
 
         // check command identifier
         if info.cmd != R::CMD {
