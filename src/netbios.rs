@@ -1,6 +1,6 @@
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tokio::net::TcpStream;
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{Bytes, Buf, BytesMut, BufMut};
 use crate::Error;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
@@ -31,10 +31,7 @@ impl NetBios {
         frame.put(msg);
 
         // send it
-        self.stream.write_all(&frame[..]).await?;
-        self.stream.flush().await?;
-
-        Ok(())
+        self.write_exactly(frame.freeze()).await
     }
 
     pub async fn read_frame(&mut self) -> Result<Bytes, Error> {
@@ -94,6 +91,14 @@ impl NetBios {
             count -= n;
         }
 
+        Ok(())
+    }
+
+    async fn write_exactly(&mut self, mut buffer: Bytes) -> Result<(), Error> {
+        while buffer.has_remaining() {
+            let _ = self.stream.write_buf(&mut buffer).await?;
+        }
+        self.stream.flush().await?;
         Ok(())
     }
 }
