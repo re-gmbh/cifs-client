@@ -244,7 +244,7 @@ impl Cifs {
 pub fn resolve_smb_uri(uri: &str) -> Result<(&str, &str, &str), Error> {
     lazy_static! {
         static ref URI_REGEX: Regex =
-            Regex::new(r"smb://(?P<host>\w[\w\.-]*(:\d+)?)/(?P<share>[\w\d\._-]+)(/(?P<path>.*))?")
+            Regex::new(r"smb://(?P<host>\w[\w\.-]*(:\d+)?)/(?P<share>[\w\._-]+)(/(?P<path>.*))?")
                 .expect("can't compile URI regex");
     }
 
