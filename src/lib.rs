@@ -7,6 +7,8 @@ mod utils;
 
 use tokio::net::TcpStream;
 use bytes::{Bytes, BytesMut};
+use lazy_static::lazy_static;
+use regex::Regex;
 
 use crate::win::{NotifyAction, NTStatus};
 use crate::netbios::NetBios;
@@ -178,7 +180,7 @@ impl Cifs {
         self.netbios.write_frame(frame_out.freeze()).await?;
 
         // wait for a frame with the correct mid
-        let (info, frame_in) = loop {
+        let (info, body) = loop {
             let mut frame = self.netbios.read_frame().await?;
             let info = Info::parse(&mut frame)?;
             if info.mid == mid {
@@ -211,7 +213,7 @@ impl Cifs {
         }
 
         // finally parse the response body into our desired result
-        R::parse(&info, frame_in).map_err(|e| e.into())
+        R::parse(&info, body).map_err(|e| e.into())
     }
 
     async fn transact<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
@@ -233,5 +235,50 @@ impl Cifs {
         -> Result<reply::SessionSetup, Error>
     {
         self.command(msg::SessionSetup::new(blob)).await
+    }
+}
+
+///
+/// Helper function that decodes an SMB URI
+///
+pub fn resolve_smb_uri(uri: &str) -> Result<(&str, &str, &str), Error> {
+    lazy_static! {
+        static ref URI_REGEX: Regex =
+            Regex::new(r"smb://(?P<host>\w[\w\.-]*(:\d+)?)/(?P<share>[\w\._-]+)(/(?P<path>.*))?")
+                .expect("can't compile URI regex");
+    }
+
+    let uri_match = URI_REGEX.captures(uri).ok_or(Error::InvalidUri)?;
+
+    let hostname = uri_match.name("host").ok_or(Error::InvalidUri)?.as_str();
+    let sharename = uri_match.name("share").ok_or(Error::InvalidUri)?.as_str();
+    let pathname = uri_match.name("path").map(|m| m.as_str()).unwrap_or("");
+
+    Ok((hostname, sharename, pathname))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_smb_uri;
+
+    #[test]
+    fn test_uri() {
+        let uri = "smb://localhost/myshare/this/is/a/path";
+        let (host, share, path) = resolve_smb_uri(uri).unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(share, "myshare");
+        assert_eq!(path, "this/is/a/path");
+
+        let uri = "smb://www.example.org:31337/foo";
+        let (host, share, path) = resolve_smb_uri(uri).unwrap();
+        assert_eq!(host, "www.example.org:31337");
+        assert_eq!(share, "foo");
+        assert_eq!(path, "");
+
+        let uri = "smb://127.0.0.1:445/share/foo";
+        let (host, share, path) = resolve_smb_uri(uri).unwrap();
+        assert_eq!(host, "127.0.0.1:445");
+        assert_eq!(share, "share");
+        assert_eq!(path, "foo");
     }
 }
