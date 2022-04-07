@@ -325,7 +325,8 @@ impl Msg for Open {
     fn body(&self, _info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
         -> Result<(), Error>
     {
-        let filename_length: u16 = self.filename
+        let encoded_filename = utils::encode_utf16le_0(&self.filename);
+        let filename_length: u16 = encoded_filename
             .len()
             .try_into()
             .map_err(|_| Error::CreatePackage("filename too long".to_owned()))?;
@@ -346,7 +347,7 @@ impl Msg for Open {
 
         // data
         data.put_u8(0); // alignment padding
-        data.put(utils::encode_utf16le_0(&self.filename).as_ref());
+        data.put(encoded_filename.as_ref());
 
         Ok(())
     }
