@@ -283,14 +283,14 @@ impl Open {
         Self {
             tid,
             filename,
-            create_flags: CreateFlags::REQUEST_OPLOCK | CreateFlags::REQUEST_OPBATCH,
+            create_flags: CreateFlags::empty(),
             directory: 0,
-            access: FileAccessMask::READ | FileAccessMask::READ_EA,
+            access: FileAccessMask::READ | FileAccessMask::READ_EA | FileAccessMask::SYNCHRONIZE,
             allocation_size: 0,
             attributes: ExtFileAttr::empty(),
             share_access: ShareAccess::READ,
             disposition: CreateDisposition::OPEN,
-            options: CreateOptions::NON_DIRECTORY | CreateOptions::SEQUENTIAL_ONLY,
+            options: CreateOptions::NON_DIRECTORY,
             impersonation: ImpersonationLevel::IMPERSONATE,
             security: SecurityFlags::empty(),
         }
