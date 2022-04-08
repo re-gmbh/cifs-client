@@ -239,22 +239,24 @@ impl Cifs {
 }
 
 ///
-/// Helper function that decodes an SMB URI
+/// Helper function that decodes an SMB URI and returns
+/// (host, port, share, path).
 ///
-pub fn resolve_smb_uri(uri: &str) -> Result<(&str, &str, &str), Error> {
+pub fn resolve_smb_uri(uri: &str) -> Result<(&str, Option<&str>, &str, &str), Error> {
     lazy_static! {
         static ref URI_REGEX: Regex =
-            Regex::new(r"smb://(?P<host>\w[\w\.-]*(:\d+)?)/(?P<share>[\w\._-]+)(/(?P<path>.*))?")
+            Regex::new(r"smb://(?P<host>\w[\w\.-]*)(:(?P<port>\d+))?/(?P<share>[\w\._-]+)(/(?P<path>.*))?")
                 .expect("can't compile URI regex");
     }
 
     let uri_match = URI_REGEX.captures(uri).ok_or(Error::InvalidUri)?;
 
     let hostname = uri_match.name("host").ok_or(Error::InvalidUri)?.as_str();
+    let maybe_port = uri_match.name("port").map(|m| m.as_str());
     let sharename = uri_match.name("share").ok_or(Error::InvalidUri)?.as_str();
     let pathname = uri_match.name("path").map(|m| m.as_str()).unwrap_or("");
 
-    Ok((hostname, sharename, pathname))
+    Ok((hostname, maybe_port, sharename, pathname))
 }
 
 #[cfg(test)]
@@ -264,20 +266,23 @@ mod tests {
     #[test]
     fn test_uri() {
         let uri = "smb://localhost/myshare/this/is/a/path";
-        let (host, share, path) = resolve_smb_uri(uri).unwrap();
+        let (host, port, share, path) = resolve_smb_uri(uri).unwrap();
         assert_eq!(host, "localhost");
+        assert_eq!(port, None);
         assert_eq!(share, "myshare");
         assert_eq!(path, "this/is/a/path");
 
         let uri = "smb://www.example.org:31337/foo";
-        let (host, share, path) = resolve_smb_uri(uri).unwrap();
-        assert_eq!(host, "www.example.org:31337");
+        let (host, port, share, path) = resolve_smb_uri(uri).unwrap();
+        assert_eq!(host, "www.example.org");
+        assert_eq!(port, Some("31337"));
         assert_eq!(share, "foo");
         assert_eq!(path, "");
 
         let uri = "smb://127.0.0.1:445/share/foo";
-        let (host, share, path) = resolve_smb_uri(uri).unwrap();
-        assert_eq!(host, "127.0.0.1:445");
+        let (host, port, share, path) = resolve_smb_uri(uri).unwrap();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, Some("445"));
         assert_eq!(share, "share");
         assert_eq!(path, "foo");
     }
