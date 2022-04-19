@@ -195,7 +195,9 @@ impl Status {
 #[derive(Debug, Clone, Copy, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum Cmd {
+    Rmdir = 0x01,
     Close = 0x04,
+    Delete = 0x06,
     Read = 0x2e,
     TreeDisconnect = 0x71,
     Negotiate = 0x72,

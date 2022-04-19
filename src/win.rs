@@ -38,6 +38,8 @@ pub enum NTStatus {
     USER_SESSION_DELETED    = 0xc0000203,
     NETWORK_SESSION_EXPIRED = 0xc000035c,
     TOO_MANY_UIDS           = 0xc000205a,
+    MEDIA_WRITE_PROTECTED   = 0xc00000a2,
+    DIRECTORY_NOT_EMPTY     = 0xc0000101,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
@@ -107,6 +109,23 @@ bitflags! {
         const GENERIC_READ      = 0x80000000;
     }
 
+    /// SMB_FILE_ATTRIBUTES from 2.2.1.2.4 CIFS-Spec
+    pub struct FileAttr: u16 {
+        const NORMAL            = 0x0000;
+        const READONLY          = 0x0001;
+        const HIDDEN            = 0x0002;
+        const SYSTEM            = 0x0004;
+        const VOLUME            = 0x0008;
+        const DIRECTORY         = 0x0010;
+        const ARCHIVE           = 0x0020;
+        const SEARCH_READONLY   = 0x0100;
+        const SEARCH_HIDDEN     = 0x0200;
+        const SEARCH_SYSTEM     = 0x0400;
+        const SEARCH_DIRECTORY  = 0x1000;
+        const SEARCH_ARCHIVE    = 0x2000;
+    }
+
+    /// SMB_EXT_FILE_ATTR, see 2.2.1.2.3 CIFS-Spec
     pub struct ExtFileAttr: u32 {
         const READONLY          = 0x00000001;
         const HIDDEN            = 0x00000002;

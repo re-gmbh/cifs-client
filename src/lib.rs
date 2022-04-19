@@ -133,6 +133,18 @@ impl Cifs {
         Ok(data)
     }
 
+    pub async fn delete(&mut self, share: &Share, path: &str) -> Result<(), Error> {
+        let filename = path.replace("/", "\\");
+        let _: reply::Delete = self.command(msg::Delete::file(share.tid, filename)).await?;
+        Ok(())
+    }
+
+    pub async fn rmdir(&mut self, share: &Share, path: &str) -> Result<(), Error> {
+        let name = path.replace("/", "\\");
+        let _: reply::Rmdir = self.command(msg::Rmdir::new(share.tid, name)).await?;
+        Ok(())
+    }
+
     pub async fn notify(&mut self, handle: &Handle)
         -> Result<Vec<(String, NotifyAction)>, Error>
     {

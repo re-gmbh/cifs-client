@@ -12,7 +12,7 @@ pub trait Reply: Sized {
     const CMD: Cmd;
     const ANDX: bool;
 
-    fn parse_param(info: &Info, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
+    fn create(info: &Info, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
 
     fn parse(info: &Info, mut buffer: Bytes) -> Result<Self, Error> {
         let parameter_count = buffer.get_u8() as usize;
@@ -28,9 +28,10 @@ pub trait Reply: Sized {
             }
         }
 
-        Self::parse_param(info, parameter, data)
+        Self::create(info, parameter, data)
     }
 }
+
 
 #[derive(Debug)]
 pub struct ServerSetup {
@@ -52,7 +53,7 @@ impl Reply for ServerSetup {
     const CMD: Cmd = Cmd::Negotiate;
     const ANDX: bool = false;
 
-    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
         -> Result<Self, Error>
     {
         // strictly there may only be one word, but we only support dialects above
@@ -125,7 +126,7 @@ impl Reply for SessionSetup {
     const CMD: Cmd = Cmd::SessionSetup;
     const ANDX: bool = true;
 
-    fn parse_param(info: &Info, mut parameter: Bytes, mut data: Bytes)
+    fn create(info: &Info, mut parameter: Bytes, mut data: Bytes)
         -> Result<Self, Error>
     {
         // parse parameter
@@ -176,7 +177,7 @@ impl Reply for Share {
     const CMD: Cmd = Cmd::TreeConnect;
     const ANDX: bool = true;
 
-    fn parse_param(info: &Info, mut parameter: Bytes, mut data: Bytes)
+    fn create(info: &Info, mut parameter: Bytes, mut data: Bytes)
         -> Result<Self, Error>
     {
         // parameter
@@ -211,16 +212,16 @@ impl Reply for Share {
 
 
 /// Reply for COM_TREE_DISCONNECT message
-pub struct TreeDisconnect {}
+pub struct TreeDisconnect;
 
 impl Reply for TreeDisconnect {
     const CMD: Cmd = Cmd::TreeDisconnect;
     const ANDX: bool = false;
 
-    fn parse_param(_info: &Info, _parameter: Bytes, _data: Bytes)
+    fn create(_info: &Info, _parameter: Bytes, _data: Bytes)
         -> Result<Self, Error>
     {
-        Ok(Self {})
+        Ok(Self)
     }
 }
 
@@ -254,7 +255,7 @@ impl Reply for Handle {
     const CMD: Cmd = Cmd::Create;
     const ANDX: bool = true;
 
-    fn parse_param(info: &Info, mut parameter: Bytes, _data: Bytes)
+    fn create(info: &Info, mut parameter: Bytes, _data: Bytes)
         -> Result<Self, Error>
     {
         // parameter
@@ -303,16 +304,16 @@ impl Reply for Handle {
 
 
 /// SMB_COM_CLOSE Message (does not contain any information).
-pub struct Close {}
+pub struct Close;
 
 impl Reply for Close {
     const CMD: Cmd = Cmd::Close;
     const ANDX: bool = false;
 
-    fn parse_param(_info: &Info, _parameter: Bytes, _data: Bytes)
+    fn create(_info: &Info, _parameter: Bytes, _data: Bytes)
         -> Result<Self, Error>
     {
-        Ok(Self {})
+        Ok(Self)
     }
 }
 
@@ -327,7 +328,7 @@ impl Reply for Read {
     const ANDX: bool = true;
 
 
-    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
         -> Result<Self, Error>
     {
         // parameter
@@ -357,6 +358,32 @@ impl Reply for Read {
     }
 }
 
+
+/// Reply to SMB_COM_DELETE (0x06), see 2.2.4.7 in CIFS
+pub struct Delete;
+
+impl Reply for Delete {
+    const CMD: Cmd = Cmd::Delete;
+    const ANDX: bool = false;
+
+    fn create(_info: &Info, _parameter: Bytes, _data: Bytes) -> Result<Self, Error> {
+        Ok(Self)
+    }
+}
+
+/// Reply to SMB_COM_DELETE_DIRECTORY (0x01), see 2.2.4.2 in CIFS
+pub struct Rmdir;
+
+impl Reply for Rmdir {
+    const CMD: Cmd = Cmd::Rmdir;
+    const ANDX: bool = false;
+
+    fn create(_info: &Info, _parameter: Bytes, _data: Bytes) -> Result<Self, Error> {
+        Ok(Self)
+    }
+}
+
+
 /// Reply to SMB_COM_NT_TRANSACT
 pub struct Transact<T> {
     pub subcmd: T,
@@ -366,7 +393,7 @@ impl<T: SubReply> Reply for Transact<T> {
     const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
-    fn parse_param(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
         -> Result<Self, Error>
     {
         let parameter_len = parameter.len();
