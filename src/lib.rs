@@ -33,10 +33,18 @@ pub struct Cifs {
 
 
 impl Cifs {
-    pub fn new(auth: Auth, stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream, maybe_auth: Option<Auth>) -> Self {
+        let guest_auth = Auth {
+            user: String::new(),
+            password: String::new(),
+            domain: "WORKGROUP".to_owned(),
+            workstation: std::env::var("HOSTNAME")
+                .unwrap_or("localhost".to_owned()),
+        };
+
         Cifs {
             netbios: NetBios::new(stream),
-            auth,
+            auth: maybe_auth.unwrap_or(guest_auth),
 
             max_smb_size: 1024,
             use_unicode: true,
