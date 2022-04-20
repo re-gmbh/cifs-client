@@ -179,12 +179,12 @@ pub struct TreeConnect {
 }
 
 impl TreeConnect {
-    pub fn new(path: &str, password: &str) -> Self {
+    pub fn new(path: String, password: String) -> Self {
         let flags = TreeConnectFlags::EXTENDED_RESPONSE;
 
         TreeConnect {
-            path: path.to_owned(),
-            password: password.to_owned(),
+            path,
+            password,
             flags,
         }
     }

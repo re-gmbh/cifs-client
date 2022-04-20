@@ -14,6 +14,7 @@ use crate::win::{NotifyAction, NTStatus};
 use crate::netbios::NetBios;
 use crate::smb::info::{Info, Cmd, Status, Flags2};
 use crate::smb::{msg, reply, subcmd, Capabilities};
+use crate::utils::sanitize_path;
 
 pub use error::Error;
 pub use ntlm::Auth;
@@ -87,8 +88,7 @@ impl Cifs {
     pub async fn mount_password(&mut self, path: &str, password: &str)
         -> Result<Share, Error>
     {
-        let normalized = path.replace("/", "\\");
-        self.command(msg::TreeConnect::new(&normalized, password)).await
+        self.command(msg::TreeConnect::new(sanitize_path(path), password.to_owned())).await
     }
 
     pub async fn umount(&mut self, share: Share) -> Result<(), Error> {
@@ -99,15 +99,13 @@ impl Cifs {
     pub async fn openfile(&mut self, share: &Share, path: &str)
         -> Result<Handle, Error>
     {
-        let filename = path.replace("/", "\\");
-        self.command(msg::Open::file_ro(share.tid, filename)).await
+        self.command(msg::Open::file_ro(share.tid, sanitize_path(path))).await
     }
 
     pub async fn opendir(&mut self, share: &Share, path: &str)
         -> Result<Handle, Error>
     {
-        let filename = path.replace("/", "\\");
-        self.command(msg::Open::dir(share.tid, filename)).await
+        self.command(msg::Open::dir(share.tid, sanitize_path(path))).await
     }
 
     pub async fn close(&mut self, file: Handle) -> Result<(), Error> {
@@ -134,14 +132,12 @@ impl Cifs {
     }
 
     pub async fn delete(&mut self, share: &Share, path: &str) -> Result<(), Error> {
-        let filename = path.replace("/", "\\");
-        let _: reply::Delete = self.command(msg::Delete::file(share.tid, filename)).await?;
+        let _: reply::Delete = self.command(msg::Delete::file(share.tid, sanitize_path(path))).await?;
         Ok(())
     }
 
     pub async fn rmdir(&mut self, share: &Share, path: &str) -> Result<(), Error> {
-        let name = path.replace("/", "\\");
-        let _: reply::Rmdir = self.command(msg::Rmdir::new(share.tid, name)).await?;
+        let _: reply::Rmdir = self.command(msg::Rmdir::new(share.tid, sanitize_path(path))).await?;
         Ok(())
     }
 
