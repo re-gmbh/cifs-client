@@ -179,12 +179,12 @@ pub struct TreeConnect {
 }
 
 impl TreeConnect {
-    pub fn new(path: &str, password: &str) -> Self {
+    pub fn new(path: String, password: String) -> Self {
         let flags = TreeConnectFlags::EXTENDED_RESPONSE;
 
         TreeConnect {
-            path: path.to_owned(),
-            password: password.to_owned(),
+            path,
+            password,
             flags,
         }
     }
@@ -439,6 +439,75 @@ impl Msg for Read {
         parameter.put_u16_le(0);
 
         parameter.put_u32_le((self.offset >> 32) as u32);
+
+        Ok(())
+    }
+}
+
+
+
+/// Parameter for SMB_COM_DELETE (0x06), see 2.2.4.7 in CIFS
+pub struct Delete {
+    tid: u16,
+    filename: String,
+    search: FileAttr,
+}
+
+impl Delete {
+    pub fn file(tid: u16, filename: String) -> Self {
+        Self {
+            tid,
+            filename,
+            search: FileAttr::HIDDEN | FileAttr::SYSTEM,
+        }
+    }
+}
+
+impl Msg for Delete {
+    const CMD: Cmd = Cmd::Delete;
+    const ANDX: bool = false;
+
+    fn fix_header(&self, info: &mut Info)  {
+        info.tid = self.tid;
+    }
+
+    fn body(&self, _info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
+        parameter.put_u16_le(self.search.bits());
+
+        data.put_u8(0x04);      // MUST be 0x04 according to spec
+        data.put(utils::encode_utf16le_0(&self.filename).as_ref());
+
+        Ok(())
+    }
+}
+
+/// Parameter for SMB_COM_DELETE_DIRECTORY (0x01), see 2.2.4.2 in CIFS
+pub struct Rmdir {
+    tid: u16,
+    dirname: String,
+}
+
+impl Rmdir {
+    pub fn new(tid: u16, dirname: String) -> Self {
+        Self { tid, dirname }
+    }
+}
+
+impl Msg for Rmdir {
+    const CMD: Cmd = Cmd::Rmdir;
+    const ANDX: bool = false;
+
+    fn fix_header(&self, info: &mut Info)  {
+        info.tid = self.tid;
+    }
+
+    fn body(&self, _info: &Info, _parameter: &mut BytesMut, data: &mut BytesMut)
+        -> Result<(), Error>
+    {
+        data.put_u8(0x04);      // MUST be 0x04 according to spec
+        data.put(utils::encode_utf16le_0(&self.dirname).as_ref());
 
         Ok(())
     }

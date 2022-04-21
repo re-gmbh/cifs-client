@@ -90,3 +90,10 @@ pub fn parse_utf16le_0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
 
     Err(ParseStrError::MissingTermination)
 }
+
+/// Windows uses backslash as a path separator, which is not only very unusual
+/// in the unix world but also unconvenient because it must be escaped.
+/// So we allow users of Cifs to use '/' instead and replace it here.
+pub fn sanitize_path(path: &str) -> String {
+    path.replace('/', "\\")
+}
