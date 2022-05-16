@@ -6,7 +6,7 @@ use crate::win::*;
 use super::Error;
 use super::common::*;
 use super::info::*;
-use super::subcmd::SubReply;
+use super::{trans, trans2};
 
 pub trait Reply: Sized {
     const CMD: Cmd;
@@ -389,7 +389,7 @@ pub struct Transact<T> {
     pub subcmd: T,
 }
 
-impl<T: SubReply> Reply for Transact<T> {
+impl<T: trans::SubReply> Reply for Transact<T> {
     const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
@@ -439,6 +439,74 @@ impl<T: SubReply> Reply for Transact<T> {
         Ok(Transact::<T> { subcmd })
     }
 }
+
+
+/// Reply to SMB_COM_TRANSACTION2, see 2.2.4.46.2
+pub struct Transact2<T> {
+    pub subcmd: T,
+}
+
+impl<T: trans2::SubReply> Reply for Transact2<T> {
+    const CMD: Cmd = Cmd::Transact2;
+    const ANDX: bool = false;
+
+    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
+        -> Result<Self, Error>
+    {
+        let data_start = SMB_HEADER_LEN + 1 + parameter.len() + 2;
+
+        // parameter
+        let total_parameter_count = parameter.get_u16_le() as usize;
+        let total_data_count = parameter.get_u16_le() as usize;
+        parameter.advance(2);   // reserved
+
+        let parameter_count = parameter.get_u16_le() as usize;
+        //parameter.advance(2);   // ignoring parameter offset
+        let parameter_offset = parameter.get_u16_le() as usize;
+        parameter.advance(2);   // ignoring parameter displacement
+
+        let data_count = parameter.get_u16_le() as usize;
+        parameter.advance(2);   // ignoring data offset
+        parameter.advance(2);   // ignoring data displacement
+
+        /*
+        let setup_words = parameter.get_u8() as usize;
+        parameter.advance(2);   // reserved
+
+        let sub_setup = parameter.copy_to_bytes(2*setup_words);
+        */
+
+        // FIXME we need to support incomplete transact2 replies
+        if parameter_count < total_parameter_count || data_count < total_data_count {
+            return Err(Error::Unsupported("transaction2 reply split to multiple packets".to_owned()));
+        }
+
+
+        // data
+        let pad1 = if parameter_count > 0 {
+            utils::fill_up_4n(data_start)
+        } else {
+            0
+        };
+
+        let pad2 = if data_count > 0 {
+            utils::fill_up_4n(data_start + pad1 + parameter_count)
+        } else {
+            0
+        };
+
+        data.advance(pad1);
+        let sub_parameter = data.copy_to_bytes(parameter_count);
+        data.advance(pad2);
+        let sub_data = data.copy_to_bytes(data_count);
+
+        // create sub-command response
+        let subcmd = T::parse(sub_parameter, sub_data)?;
+
+        Ok(Transact2::<T> { subcmd })
+    }
+}
+
 
 
 

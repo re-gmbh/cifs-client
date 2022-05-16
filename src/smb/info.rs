@@ -199,6 +199,7 @@ pub enum Cmd {
     Close = 0x04,
     Delete = 0x06,
     Read = 0x2e,
+    Transact2 = 0x32,
     TreeDisconnect = 0x71,
     Negotiate = 0x72,
     SessionSetup = 0x73,

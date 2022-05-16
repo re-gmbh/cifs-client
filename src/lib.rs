@@ -10,10 +10,11 @@ use bytes::{Bytes, BytesMut};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::win::{NotifyAction, NTStatus};
+use crate::win::{NotifyAction, NTStatus, FileAttr};
 use crate::netbios::NetBios;
 use crate::smb::info::{Info, Cmd, Status, Flags2};
-use crate::smb::{msg, reply, subcmd, Capabilities};
+use crate::smb::{msg, reply, trans, Capabilities};
+use crate::smb::trans2::{self, DirInfo};
 use crate::utils::sanitize_path;
 
 pub use error::Error;
@@ -153,11 +154,22 @@ impl Cifs {
         -> Result<Vec<(String, NotifyAction)>, Error>
     {
         // sub-command we want to run via SMB transact
-        let cmd = subcmd::NotifySetup::new(handle.fid, subcmd::NotifyMode::all(), false);
+        let cmd = trans::NotifySetup::new(handle.fid, trans::NotifyMode::all(), false);
         // get sub-command response via transact
-        let reply: subcmd::Notification = self.transact(handle.tid, cmd).await?;
+        let reply: trans::Notification = self.transact(handle.tid, cmd).await?;
 
         Ok(reply.changes)
+    }
+
+
+    pub async fn list(&mut self, share: &Share, path: &str)
+        -> Result<Vec<DirInfo>, Error>
+    {
+        let search = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
+        let cmd = trans2::FindFirst2::new(sanitize_path(path), search);
+        let reply: trans2::FindFirst2Reply = self.transact2(share.tid, cmd).await?;
+
+        Ok(reply.info)
     }
 
 
@@ -234,11 +246,25 @@ impl Cifs {
 
     async fn transact<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
     where
-        C: subcmd::SubCmd,
-        R: subcmd::SubReply,
+        C: trans::SubCmd,
+        R: trans::SubReply,
     {
         let msg = msg::Transact::new(tid, cmd);
         let reply: reply::Transact<R> = self.command(msg).await?;
+
+        Ok(reply.subcmd)
+    }
+
+
+    // FIXME: this is not enough for us: for transact2 we really must implement
+    // sub-command fragmentation
+    async fn transact2<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
+    where
+        C: trans2::SubCmd,
+        R: trans2::SubReply,
+    {
+        let msg = msg::Transact2::new(tid, cmd);
+        let reply: reply::Transact2<R> = self.command(msg).await?;
 
         Ok(reply.subcmd)
     }
