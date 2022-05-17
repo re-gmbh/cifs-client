@@ -107,3 +107,12 @@ pub fn round_up_4n(n: usize) -> usize {
 pub fn fill_up_4n(n: usize) -> usize {
     (4 - n % 4) % 4
 }
+
+/// try subtracting b from a and return None in case of underflow
+pub fn try_sub(a: usize, b: usize) -> Option<usize> {
+    if a < b {
+        None
+    } else {
+        Some(a - b)
+    }
+}

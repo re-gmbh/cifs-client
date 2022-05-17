@@ -241,7 +241,7 @@ impl Cifs {
         }
 
         // finally parse the response body into our desired result
-        R::parse(&info, body).map_err(|e| e.into())
+        R::parse(info, body).map_err(|e| e.into())
     }
 
     async fn transact<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
