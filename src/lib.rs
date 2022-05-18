@@ -13,8 +13,7 @@ use regex::Regex;
 use crate::win::{NotifyAction, NTStatus, FileAttr};
 use crate::netbios::NetBios;
 use crate::smb::info::{Info, Cmd, Status, Flags2};
-use crate::smb::{msg, reply, trans, Capabilities};
-use crate::smb::trans2::{self, DirInfo};
+use crate::smb::{msg, reply, trans, trans2, Capabilities, DirInfo};
 use crate::utils::sanitize_path;
 
 pub use error::Error;
@@ -166,8 +165,8 @@ impl Cifs {
         -> Result<Vec<DirInfo>, Error>
     {
         let search = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
-        let cmd = trans2::FindFirst2::new(sanitize_path(path), search);
-        let reply: trans2::FindFirst2Reply = self.transact2(share.tid, cmd).await?;
+        let cmd = trans2::subcmd::FindFirst2::new(sanitize_path(path), search);
+        let reply: trans2::subreply::FindFirst2 = self.transact2(share.tid, cmd).await?;
 
         Ok(reply.info)
     }
@@ -263,8 +262,8 @@ impl Cifs {
         C: trans2::SubCmd,
         R: trans2::SubReply,
     {
-        let msg = msg::Transact2::new(tid, cmd);
-        let reply: reply::Transact2<R> = self.command(msg).await?;
+        let msg = trans2::msg::Transact2::new(tid, cmd);
+        let reply: trans2::reply::Transact2<R> = self.command(msg).await?;
 
         Ok(reply.subcmd)
     }
