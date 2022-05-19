@@ -2,6 +2,7 @@ pub(crate) mod msg;
 pub(crate) mod reply;
 pub(crate) mod subcmd;
 pub(crate) mod subreply;
+pub(crate) mod collector;
 
 use bytes::Bytes;
 use super::Error;

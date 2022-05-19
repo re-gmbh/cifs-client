@@ -178,16 +178,8 @@ impl Cifs {
     // private functions
     //
 
-    /// Sends a generic message M and expects result generic R. There is no
-    /// check that M and R "fit" together (like M::CMD == R::CMD), so this
-    /// is clearly not meant to be a public method.
-    /// We built safe wrapper around command, with correct message and reply
-    /// types.
-    async fn command<M,R>(&mut self, msg: M) -> Result<R, Error>
-    where
-        M: msg::Msg,
-        R: reply::Reply,
-    {
+    /// sends a message to server and returns mid used to send it.
+    async fn send<M: msg::Msg>(&mut self, msg: M) -> Result<u16, Error> {
         let mut frame_out = BytesMut::with_capacity(self.max_smb_size);
 
         // allocate a multiplex id
@@ -206,6 +198,15 @@ impl Cifs {
         msg.write(&info, &mut frame_out)?;
         self.netbios.write_frame(frame_out.freeze()).await?;
 
+        Ok(mid)
+    }
+
+
+    /// receives a reply of type R and given mid.
+    ///
+    /// Note: for simplification this function will drop any response that
+    /// does not match the given mid.
+    async fn recv<R: reply::Reply>(&mut self, mid: u16) -> Result<R, Error> {
         // wait for a frame with the correct mid
         let (info, body) = loop {
             let mut frame = self.netbios.read_frame().await?;
@@ -243,6 +244,22 @@ impl Cifs {
         R::parse(info, body).map_err(|e| e.into())
     }
 
+
+
+    /// Sends a generic message M and expects result generic R. There is no
+    /// check that M and R "fit" together (like M::CMD == R::CMD), so this
+    /// is clearly not meant to be a public method.
+    /// We built safe wrapper around command, with correct message and reply
+    /// types.
+    async fn command<M,R>(&mut self, msg: M) -> Result<R, Error>
+    where
+        M: msg::Msg,
+        R: reply::Reply,
+    {
+        let mid = self.send(msg).await?;
+        self.recv(mid).await
+    }
+
     async fn transact<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
     where
         C: trans::SubCmd,
@@ -255,17 +272,25 @@ impl Cifs {
     }
 
 
-    // FIXME: this is not enough for us: for transact2 we really must implement
-    // sub-command fragmentation
-    async fn transact2<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
+    async fn transact2<C,R>(&mut self, tid: u16, subcmd: C) -> Result<R, Error>
     where
         C: trans2::SubCmd,
         R: trans2::SubReply,
     {
-        let msg = trans2::msg::Transact2::new(tid, cmd);
-        let reply: trans2::reply::Transact2<R> = self.command(msg).await?;
+        // we only send single transaction messages with the given subcommand.
+        // (in theory we could fragment the message if the subcommand is too big)
+        let mid = self.send(trans2::msg::Transact2::new(tid, subcmd)).await?;
 
-        Ok(reply.subcmd)
+        // collect replies
+        let mut ctx = trans2::collector::CollectTrans2::new();
+        loop {
+            let reply: trans2::reply::Transact2 = self.recv(mid).await?;
+            if ctx.add(reply)? {
+                break;
+            }
+        };
+
+        Ok(ctx.get_subreply()?)
     }
 
     async fn negotiate(&mut self) -> Result<reply::ServerSetup, Error> {

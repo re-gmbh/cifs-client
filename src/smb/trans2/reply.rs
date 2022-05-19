@@ -1,17 +1,20 @@
-use bytes::Buf;
+use bytes::{Bytes, Buf};
 
 use crate::utils;
 use crate::smb::Error;
 use crate::smb::info::Cmd;
 use crate::smb::reply::{Reply, ReplyCtx};
-use super::SubReply;
 
 /// Reply to SMB_COM_TRANSACTION2, see 2.2.4.46.2
-pub(crate) struct Transact2<T> {
-    pub subcmd: T,
+pub(crate) struct Transact2 {
+    pub parameter: Bytes,
+    pub parameter_total: usize,
+
+    pub data: Bytes,
+    pub data_total: usize,
 }
 
-impl<T: SubReply> Reply for Transact2<T> {
+impl Reply for Transact2 {
     const CMD: Cmd = Cmd::Transact2;
     const ANDX: bool = false;
 
@@ -31,22 +34,18 @@ impl<T: SubReply> Reply for Transact2<T> {
             .ok_or(Error::InvalidData)?;
         ctx.parameter.advance(2);   // ignoring data displacement
 
-
-        // FIXME we need to support incomplete transact2 replies
-        if parameter_count < total_parameter_count || data_count < total_data_count {
-            return Err(Error::Unsupported("transaction2 reply split to multiple packets".to_owned()));
-        }
-
         // data
         let sub_parameter = ctx.data.slice(parameter_offset..parameter_offset+parameter_count);
         let sub_data = ctx.data.slice(data_offset..data_offset+data_count);
 
-        // create sub-command response
-        let subcmd = T::parse(sub_parameter, sub_data)?;
+        let reply = Self {
+            parameter: sub_parameter,
+            parameter_total: total_parameter_count,
 
-        Ok(Transact2::<T> { subcmd })
+            data: sub_data,
+            data_total: total_data_count,
+        };
+
+        Ok(reply)
     }
 }
-
-
-
