@@ -167,6 +167,7 @@ impl Cifs {
         let search = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
         let cmd = trans2::subcmd::FindFirst2::new(sanitize_path(path), search);
         let reply: trans2::subreply::FindFirst2 = self.transact2(share.tid, cmd).await?;
+
         // are we done yet?
         if reply.end {
             return Ok(reply.info);
@@ -177,7 +178,7 @@ impl Cifs {
         let mut result = reply.info;
 
         loop {
-            let cmd = trans2::subcmd::FindNext2::new(sid, last.clone());
+            let cmd = trans2::subcmd::FindNext2::new(sid, last);
             let mut reply: trans2::subreply::FindNext2 = self.transact2(share.tid, cmd).await?;
 
             last = reply.info.last().unwrap().filename.clone();
@@ -186,7 +187,6 @@ impl Cifs {
             if reply.end {
                 break;
             }
-
         }
 
         Ok(result)

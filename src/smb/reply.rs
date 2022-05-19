@@ -476,7 +476,7 @@ mod tests {
         let info = Info::default(Cmd::Negotiate);
 
         // Negotiate returns a ServerSetup
-        let reply = ServerSetup::parse(&info, buffer)
+        let reply = ServerSetup::parse(info, buffer)
             .expect("can't parse negotiate body");
 
         // check reply
@@ -523,7 +523,7 @@ mod tests {
         let buffer = BytesMut::from(&blob[..]).freeze();
 
         let info = Info::default(Cmd::Negotiate);
-        let reply = SessionSetup::parse(&info, buffer)
+        let reply = SessionSetup::parse(info, buffer)
             .expect("can't parse SessionSetup");
 
         assert_eq!(reply.guest_mode, false);
