@@ -9,9 +9,11 @@ use crate::smb::reply::{Reply, ReplyCtx};
 pub(crate) struct Transact2 {
     pub parameter: Bytes,
     pub parameter_total: usize,
+    pub parameter_offset: usize,
 
     pub data: Bytes,
     pub data_total: usize,
+    pub data_offset: usize,
 }
 
 impl Reply for Transact2 {
@@ -27,12 +29,12 @@ impl Reply for Transact2 {
         let parameter_count = ctx.parameter.get_u16_le() as usize;
         let parameter_offset = utils::try_sub(ctx.parameter.get_u16_le().into(), ctx.data_offset)
             .ok_or(Error::InvalidData)?;
-        ctx.parameter.advance(2);   // ignoring parameter displacement
+        let parameter_displacement = ctx.parameter.get_u16_le() as usize;
 
         let data_count = ctx.parameter.get_u16_le() as usize;
         let data_offset = utils::try_sub(ctx.parameter.get_u16_le().into(), ctx.data_offset)
             .ok_or(Error::InvalidData)?;
-        ctx.parameter.advance(2);   // ignoring data displacement
+        let data_displacement = ctx.parameter.get_u16_le() as usize;   // ignoring data displacement
 
         // data
         let sub_parameter = ctx.data.slice(parameter_offset..parameter_offset+parameter_count);
@@ -41,9 +43,11 @@ impl Reply for Transact2 {
         let reply = Self {
             parameter: sub_parameter,
             parameter_total: total_parameter_count,
+            parameter_offset: parameter_displacement,
 
             data: sub_data,
             data_total: total_data_count,
+            data_offset: data_displacement,
         };
 
         Ok(reply)

@@ -2,34 +2,25 @@ use bytes::{Bytes, Buf};
 
 use crate::smb::{Error, DirInfo, trans2::SubReply};
 
-
-/// Reply to TRANS2_FIND_FIRST2, see 2.2.6.2.2
-pub struct FindFirst2 {
-    pub sid: u16,
+/// Reply to TRANS2_FIND_NEXT2, see 2.2.6.3.2
+pub struct FindNext2 {
     pub end: bool,
     pub info: Vec<DirInfo>,
 }
 
-impl SubReply for FindFirst2 {
-    const SETUP: u16 = 0x0001;
+impl SubReply for FindNext2 {
+    const SETUP: u16 = 0x0002;
 
     fn parse(mut parameter: Bytes, mut data: Bytes) -> Result<Self, Error> {
         // parse subreply parameter
-        if parameter.remaining() < 10 {
+        if parameter.remaining() < 4 {
             return Err(Error::InvalidData);
         }
 
-        let sid = parameter.get_u16_le();
         let count = parameter.get_u16_le() as usize;
         let end = parameter.get_u16_le() != 0;
-        parameter.advance(2);
 
-        // Offset of last dir info (relativ to SMB header). Right now we can't
-        // use the offset here, since we don't now where in the SMB frame we are.
-        // I hope, that the last dir info is allways simply the last in the following
-        // list so we don't need the offset...
-        //let last_entry_offset = parameter.get_u16_le();
-
+        // ignore EA error offset (u16le) and last dir-entry offset (u16le).
 
         // parse subreply data
         let mut info = Vec::with_capacity(count);
@@ -67,12 +58,6 @@ impl SubReply for FindFirst2 {
             return Err(Error::InvalidData);
         }
 
-        let subreply = FindFirst2 {
-            sid,
-            end,
-            info,
-        };
-
-        Ok(subreply)
+        Ok( Self { end, info } )
     }
 }

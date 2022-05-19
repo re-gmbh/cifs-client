@@ -132,3 +132,23 @@ impl DirInfo {
         Ok(info)
     }
 }
+
+bitflags! {
+    pub struct FindFlags: u16 {
+        const CLOSE_AFTER_REQ       = 0x0001;
+        const CLOSE_ON_EOS          = 0x0002;
+        const RETURN_RESUME         = 0x0004;
+        const CONTINUE_FROM_LAST    = 0x0008;
+        const WITH_BACKUP_INTENT    = 0x0010;
+    }
+
+    pub struct FindInfoLevel: u16 {
+        const STANDARD              = 0x0001;
+        const QUERY_EA_SIZE         = 0x0002;
+        const QUERY_EA_FROM_LIST    = 0x0003;
+        const DIRECTORY_INFO        = 0x0101;
+        const FULL_DIRECTORY_INFO   = 0x0102;
+        const NAMES_INFO            = 0x0103;
+        const BOTH_DIRECTORY_INFO   = 0x0104;
+    }
+}
