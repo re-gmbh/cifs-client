@@ -95,4 +95,3 @@ impl<T: SubCmd> Msg for Transact2<T> {
         Ok(())
     }
 }
-

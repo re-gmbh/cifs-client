@@ -164,6 +164,7 @@ impl Cifs {
     pub async fn list(&mut self, share: &Share, path: &str)
         -> Result<Vec<DirInfo>, Error>
     {
+        // listing starts with a FindFirst2 command
         let search = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
         let cmd = trans2::subcmd::FindFirst2::new(sanitize_path(path), search);
         let reply: trans2::subreply::FindFirst2 = self.transact2(share.tid, cmd).await?;
@@ -173,17 +174,15 @@ impl Cifs {
             return Ok(reply.info);
         }
 
+        // we are not done: send FindNext commands until we are
         let sid = reply.sid;
-        let mut last = reply.info.last().unwrap().filename.clone();
         let mut result = reply.info;
 
         loop {
-            let cmd = trans2::subcmd::FindNext2::new(sid, last);
+            let cmd = trans2::subcmd::FindNext2::new(sid, &result.last().unwrap().filename);
             let mut reply: trans2::subreply::FindNext2 = self.transact2(share.tid, cmd).await?;
 
-            last = reply.info.last().unwrap().filename.clone();
             result.append(&mut reply.info);
-
             if reply.end {
                 break;
             }

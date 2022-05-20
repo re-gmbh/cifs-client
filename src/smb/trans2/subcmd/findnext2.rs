@@ -8,16 +8,16 @@ use crate::smb::{
 };
 
 /// TRANS2_FIND_NEXT2 sub command, see 2.2.6.3.1
-pub struct FindNext2 {
+pub struct FindNext2<'a> {
     sid: u16,
     count: u16,
     flags: FindFlags,
-    filename: String,
+    filename: &'a str,
 }
 
 
-impl FindNext2 {
-    pub fn new(sid: u16, filename: String) -> Self {
+impl<'a> FindNext2<'a> {
+    pub fn new(sid: u16, filename: &'a str) -> Self {
         Self {
             sid,
             count: 1024,
@@ -27,7 +27,7 @@ impl FindNext2 {
     }
 }
 
-impl SubCmd for FindNext2 {
+impl<'a> SubCmd for FindNext2<'a> {
     const SETUP: u16 = 0x0002;
 
     const MAX_SETUP_COUNT: u8 = 0;
@@ -35,7 +35,7 @@ impl SubCmd for FindNext2 {
     const MAX_DATA_COUNT: u16 = 65535;
 
     fn parameter(&self) -> Result<Bytes, Error> {
-        let filename = utils::encode_utf16le_0(self.filename.as_ref());
+        let filename = utils::encode_utf16le_0(self.filename);
 
         let mut parameter = BytesMut::with_capacity(12 + filename.len());
 
