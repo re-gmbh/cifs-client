@@ -1,19 +1,31 @@
-use chrono::{Utc, TimeZone};
+use chrono::{DateTime, TimeZone, Utc, Local, Duration};
 use md4::Md4;
 use md5::{Digest, Md5};
 use hmac::{Hmac, Mac};
 use bytes::{Bytes, Buf};
 
-pub fn get_windows_time() -> u64 {
-    let back_then = Utc.ymd(1601, 1, 1).and_hms(0, 1, 1);
-    let now = Utc::now();
+/// From MS-DYTP 2.2.3: FILETIME is a 64bit value, representing the
+/// number of 100-nanosecond intervals that have elapsed since January
+/// 1, 1601 in UTC.
+pub fn decode_windows_time(time: u64) -> DateTime<Local> {
+    let base_time = Utc.ymd(1601, 1, 1).and_hms(0, 0, 0);
+    let delta = Duration::microseconds((time/10) as i64);
+    (base_time + delta).into()
+}
 
-    let duration = now.signed_duration_since(back_then)
-       .num_microseconds()
-       .expect("you found a 300000 years old bug (or your clock is slightly off)");
+pub fn encode_windows_time<Tz: TimeZone>(time: DateTime<Tz>) -> u64 {
+    let base_time = Utc.ymd(1601, 1, 1).and_hms(0, 0, 0);
+    let duration = time
+        .signed_duration_since(base_time)
+        .num_microseconds()
+        .expect("your time is too far in the future");
 
     // we need 10th of a ms
     10 * (duration as u64)
+}
+
+pub fn get_windows_time() -> u64 {
+    encode_windows_time(Utc::now())
 }
 
 pub fn hmac_md5_oneshot(key: &[u8], data: &[u8]) -> [u8; 16] {
@@ -114,5 +126,22 @@ pub fn try_sub(a: usize, b: usize) -> Option<usize> {
         None
     } else {
         Some(a - b)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_time() {
+        let start = Utc::now();
+        let wintime = encode_windows_time(start);
+        let check = decode_windows_time(wintime);
+        let delta = check.signed_duration_since(start)
+                         .num_microseconds()
+                         .unwrap();
+
+        assert_eq!(delta, 0);
     }
 }

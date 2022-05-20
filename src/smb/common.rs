@@ -1,5 +1,6 @@
 use bitflags::bitflags;
 use bytes::{Bytes, Buf, BytesMut, BufMut};
+use chrono::{DateTime, Local};
 
 use crate::utils;
 use crate::win::ExtFileAttr;
@@ -79,10 +80,10 @@ impl AndX {
 /// file size.
 #[derive(Debug)]
 pub struct DirInfo {
-    pub creation_time: u64,
-    pub access_time: u64,
-    pub write_time: u64,
-    pub change_time: u64,
+    pub creation_time: DateTime<Local>,
+    pub access_time: DateTime<Local>,
+    pub write_time: DateTime<Local>,
+    pub change_time: DateTime<Local>,
     pub filename: String,
     pub filesize: u64,
     pub attributes: ExtFileAttr,
@@ -99,11 +100,10 @@ impl DirInfo {
 
         data.advance(4);    // ignore file index as recommended by spec
 
-        // FIXME should have a real time datatime
-        let creation_time = data.get_u64_le();
-        let access_time = data.get_u64_le();
-        let write_time = data.get_u64_le();
-        let change_time = data.get_u64_le();
+        let creation_time = utils::decode_windows_time(data.get_u64_le());
+        let access_time = utils::decode_windows_time(data.get_u64_le());
+        let write_time = utils::decode_windows_time(data.get_u64_le());
+        let change_time = utils::decode_windows_time(data.get_u64_le());
 
         let filesize = data.get_u64_le();
         data.advance(8);    // ignore allocation size, as we don't need it
