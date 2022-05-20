@@ -160,27 +160,58 @@ impl Cifs {
         Ok(reply.changes)
     }
 
+    /// find_first starts a search for files in the given share for the given pattern.
+    ///
+    /// It returns a FindFirst2 structure r, with:
+    ///
+    ///   If r.end is true, r.info holds all the requested DirInfo.
+    ///
+    ///   If r.end is false, r.info holds a partial result and self.find_next()
+    ///   must be used with r.sid as search id.
+    ///
+    pub async fn find_first(&mut self, share: &Share, pattern: &str)
+        -> Result<trans2::subreply::FindFirst2, Error>
+    {
+        let search_flags = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
+        let subcmd = trans2::subcmd::FindFirst2::new(sanitize_path(pattern), search_flags);
+        self.transact2(share.tid, subcmd).await
+    }
 
-    pub async fn list(&mut self, share: &Share, path: &str)
+    /// find_next continues a search in the given share: sid must be the search
+    /// id returned by a previous find_first and lastfile must be the last
+    /// filename given by last find_first or find_next.
+    ///
+    /// It returns a FindNext2 structure r, with:
+    ///   r.info holding a vector of additional DirInfo.
+    ///   r.end is true if the search is done (otherwise find_next needs to be
+    ///   called again).
+    ///
+    pub async fn find_next(&mut self, share: &Share, sid: u16, lastfile: &str)
+        -> Result<trans2::subreply::FindNext2, Error>
+    {
+        let subcmd = trans2::subcmd::FindNext2::new(sid, lastfile);
+        self.transact2(share.tid, subcmd).await
+    }
+
+
+    /// list is a high-level command doing a file-search for the given pattern in the
+    /// given share. It returns a complete list of DirInfo, representing the search
+    /// result. If more control is needed, use the more low-level find_first/find_next
+    /// methods.
+    pub async fn list(&mut self, share: &Share, pattern: &str)
         -> Result<Vec<DirInfo>, Error>
     {
-        // listing starts with a FindFirst2 command
-        let search = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
-        let cmd = trans2::subcmd::FindFirst2::new(sanitize_path(path), search);
-        let reply: trans2::subreply::FindFirst2 = self.transact2(share.tid, cmd).await?;
-
-        // are we done yet?
+        let reply = self.find_first(share, pattern).await?;
         if reply.end {
             return Ok(reply.info);
         }
 
-        // we are not done: send FindNext commands until we are
+        // we are not done: call find_next until we are
         let sid = reply.sid;
         let mut result = reply.info;
 
         loop {
-            let cmd = trans2::subcmd::FindNext2::new(sid, &result.last().unwrap().filename);
-            let mut reply: trans2::subreply::FindNext2 = self.transact2(share.tid, cmd).await?;
+            let mut reply = self.find_next(share, sid, &result.last().unwrap().filename).await?;
 
             result.append(&mut reply.info);
             if reply.end {
@@ -190,7 +221,6 @@ impl Cifs {
 
         Ok(result)
     }
-
 
 
 
