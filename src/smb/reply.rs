@@ -6,19 +6,33 @@ use crate::win::*;
 use super::Error;
 use super::common::*;
 use super::info::*;
-use super::subcmd::SubReply;
+use super::trans;
 
-pub trait Reply: Sized {
+/// Helper struct holding all relevant information of a reply
+/// to be used by create() method.
+pub(crate) struct ReplyCtx {
+    pub info: Info,
+
+    pub parameter: Bytes,
+
+    pub data: Bytes,
+    pub data_offset: usize,
+}
+
+
+pub(crate) trait Reply: Sized {
     const CMD: Cmd;
     const ANDX: bool;
 
-    fn create(info: &Info, parameter: Bytes, data: Bytes) -> Result<Self, Error>;
+    fn create(ctx: ReplyCtx) -> Result<Self, Error>;
 
-    fn parse(info: &Info, mut buffer: Bytes) -> Result<Self, Error> {
+    fn parse(info: Info, mut buffer: Bytes) -> Result<Self, Error> {
         let parameter_count = buffer.get_u8() as usize;
+        let parameter_offset = SMB_HEADER_LEN + 1;
         let mut parameter = buffer.copy_to_bytes(2*parameter_count);
 
         let data_count = buffer.get_u16_le() as usize;
+        let data_offset = parameter_offset + 2*parameter_count + 2;
         let data = buffer.copy_to_bytes(data_count);
 
         // first parameter is AndX structure, if this command has one
@@ -28,7 +42,15 @@ pub trait Reply: Sized {
             }
         }
 
-        Self::create(info, parameter, data)
+        let ctx = ReplyCtx {
+            info,
+            parameter,
+            data,
+            data_offset,
+        };
+
+
+        Self::create(ctx)
     }
 }
 
@@ -53,14 +75,16 @@ impl Reply for ServerSetup {
     const CMD: Cmd = Cmd::Negotiate;
     const ANDX: bool = false;
 
-    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(ctx: ReplyCtx) -> Result<Self, Error> {
         // strictly there may only be one word, but we only support dialects above
         // NTLM 0.12 and therefor need at least 17 words.
-        if parameter.len() < 17 {
+        if ctx.parameter.len() < 17 {
             return Err(Error::Unsupported("negotiate header with too few parameter".to_owned()));
         }
+
+
+        // parse parameter
+        let mut parameter = ctx.parameter;
 
         // this must always be here (0xffff means no supported dialects)
         let dialect = parameter.get_u16_le() as usize;
@@ -87,6 +111,7 @@ impl Reply for ServerSetup {
         //
         // Now parse data
         //
+        let mut data = ctx.data;
         if data.len() < 16 {
             return Err(Error::InvalidData);
         }
@@ -126,14 +151,14 @@ impl Reply for SessionSetup {
     const CMD: Cmd = Cmd::SessionSetup;
     const ANDX: bool = true;
 
-    fn create(info: &Info, mut parameter: Bytes, mut data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(ctx: ReplyCtx) -> Result<Self, Error> {
         // parse parameter
+        let mut parameter = ctx.parameter;
         let action = parameter.get_u16_le();
         let blob_length = parameter.get_u16_le() as usize;
 
         // parse data
+        let mut data = ctx.data;
         let blob = data.copy_to_bytes(blob_length);
 
         // these two maybe unicode or ascii depending on flags2
@@ -144,7 +169,7 @@ impl Reply for SessionSetup {
         let reply = SessionSetup {
             guest_mode: action & 0x0001 == 1,
             security_blob: blob,
-            uid: info.uid,
+            uid: ctx.info.uid,
         };
 
         Ok(reply)
@@ -177,18 +202,18 @@ impl Reply for Share {
     const CMD: Cmd = Cmd::TreeConnect;
     const ANDX: bool = true;
 
-    fn create(info: &Info, mut parameter: Bytes, mut data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(ctx: ReplyCtx) -> Result<Self, Error> {
         // parameter
+        let mut parameter = ctx.parameter;
         parameter.advance(2);       // ignore optional support
         let access_rights = DirAccessMask::from_bits_truncate(parameter.get_u32_le());
         let guest_rights = DirAccessMask::from_bits_truncate(parameter.get_u32_le());
 
         // data
+        let mut data = ctx.data;
         let service = utils::parse_str_0(&mut data)?;
 
-        let filesystem = if info.flags2.contains(Flags2::UNICODE) {
+        let filesystem = if ctx.info.flags2.contains(Flags2::UNICODE) {
             // skip one byte padding
             if service.len() % 2 == 1 {
                 data.advance(1);
@@ -203,7 +228,7 @@ impl Reply for Share {
             guest_rights,
             service,
             filesystem,
-            tid: info.tid,
+            tid: ctx.info.tid,
         };
 
         Ok(reply)
@@ -218,9 +243,7 @@ impl Reply for TreeDisconnect {
     const CMD: Cmd = Cmd::TreeDisconnect;
     const ANDX: bool = false;
 
-    fn create(_info: &Info, _parameter: Bytes, _data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(_ctx: ReplyCtx) -> Result<Self, Error> {
         Ok(Self)
     }
 }
@@ -255,10 +278,9 @@ impl Reply for Handle {
     const CMD: Cmd = Cmd::Create;
     const ANDX: bool = true;
 
-    fn create(info: &Info, mut parameter: Bytes, _data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(ctx: ReplyCtx) -> Result<Self, Error> {
         // parameter
+        let mut parameter = ctx.parameter;
         let oplock = OpLockLevel::from_bits_truncate(parameter.get_u8());
         let fid = parameter.get_u16_le();
         let disposition = CreateDisposition::from_bits_truncate(parameter.get_u32_le());
@@ -283,7 +305,7 @@ impl Reply for Handle {
 
 
         let reply = Self {
-            tid: info.tid,
+            tid: ctx.info.tid,
             fid,
             oplock,
             disposition,
@@ -310,9 +332,7 @@ impl Reply for Close {
     const CMD: Cmd = Cmd::Close;
     const ANDX: bool = false;
 
-    fn create(_info: &Info, _parameter: Bytes, _data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(_ctx: ReplyCtx) -> Result<Self, Error> {
         Ok(Self)
     }
 }
@@ -328,10 +348,9 @@ impl Reply for Read {
     const ANDX: bool = true;
 
 
-    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
-        -> Result<Self, Error>
-    {
+    fn create(ctx: ReplyCtx) -> Result<Self, Error> {
         // parameter
+        let mut parameter = ctx.parameter;
         parameter.advance(2);   // available (only for pipes)
         parameter.advance(2);   // data compaction (reserved, should be 0)
         parameter.advance(2);   // more reserved
@@ -342,7 +361,7 @@ impl Reply for Read {
 
 
         // data
-
+        let mut data = ctx.data;
         // skip 1 byte of optional padding
         if data.remaining() > length {
             data.advance(1);
@@ -366,7 +385,7 @@ impl Reply for Delete {
     const CMD: Cmd = Cmd::Delete;
     const ANDX: bool = false;
 
-    fn create(_info: &Info, _parameter: Bytes, _data: Bytes) -> Result<Self, Error> {
+    fn create(_ctx: ReplyCtx) -> Result<Self, Error> {
         Ok(Self)
     }
 }
@@ -378,57 +397,57 @@ impl Reply for Rmdir {
     const CMD: Cmd = Cmd::Rmdir;
     const ANDX: bool = false;
 
-    fn create(_info: &Info, _parameter: Bytes, _data: Bytes) -> Result<Self, Error> {
+    fn create(_ctx: ReplyCtx) -> Result<Self, Error> {
         Ok(Self)
     }
 }
 
 
-/// Reply to SMB_COM_NT_TRANSACT
+/// Reply to SMB_COM_NT_TRANSACT, see 2.2.4.62.2
 pub struct Transact<T> {
     pub subcmd: T,
 }
 
-impl<T: SubReply> Reply for Transact<T> {
+impl<T: trans::SubReply> Reply for Transact<T> {
     const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
-    fn create(_info: &Info, mut parameter: Bytes, mut data: Bytes)
-        -> Result<Self, Error>
-    {
-        let parameter_len = parameter.len();
-
+    fn create(mut ctx: ReplyCtx) -> Result<Self, Error> {
         // parameter
-        parameter.advance(3);
-        let total_parameter_count = parameter.get_u32_le() as usize;
-        let total_data_count = parameter.get_u32_le() as usize;
-        let parameter_count = parameter.get_u32_le() as usize;
-        let _parameter_offset = parameter.get_u32_le();
-        let _parameter_displacement = parameter.get_u32_le();
-        let data_count = parameter.get_u32_le() as usize;
-        let _data_offset = parameter.get_u32_le();
-        let _data_displacement = parameter.get_u32_le();
-        let setup_words = parameter.get_u8() as usize;
-        let sub_setup = parameter.copy_to_bytes(2*setup_words);
+        ctx.parameter.advance(3);
+        let total_parameter_count = ctx.parameter.get_u32_le() as usize;
+        let total_data_count = ctx.parameter.get_u32_le() as usize;
+
+        let parameter_count = ctx.parameter.get_u32_le() as usize;
+        let raw_parameter_offset = ctx.parameter.get_u32_le() as usize;
+        let _parameter_displacement = ctx.parameter.get_u32_le();
+
+        let data_count = ctx.parameter.get_u32_le() as usize;
+        let raw_data_offset = ctx.parameter.get_u32_le() as usize;
+        let _data_displacement = ctx.parameter.get_u32_le();
+
+        let setup_words = ctx.parameter.get_u8() as usize;
+        let sub_setup = ctx.parameter.copy_to_bytes(2*setup_words);
 
         if parameter_count < total_parameter_count || data_count < total_data_count {
             return Err(Error::Unsupported("transaction message split to multiple packets".to_owned()));
         }
 
         // data
-        let data_start = SMB_HEADER_LEN + 1 + parameter_len + 2;
-
-
         let sub_parameter = if parameter_count > 0 {
-            data.advance((4 - (data_start % 4)) % 4);
-            data.copy_to_bytes(parameter_count)
+            let offset = utils::try_sub(raw_parameter_offset, ctx.data_offset)
+                .ok_or(Error::InvalidData)?;
+
+            ctx.data.slice(offset..offset+parameter_count)
         } else {
             Bytes::new()
         };
 
         let sub_data = if data_count > 0 {
-            data.advance((4 - ((data_start + sub_parameter.len()) % 4)) % 4);
-            data.copy_to_bytes(data_count)
+            let offset = utils::try_sub(raw_data_offset, ctx.data_offset)
+                .ok_or(Error::InvalidData)?;
+
+            ctx.data.slice(offset..offset+data_count)
         } else {
             Bytes::new()
         };
@@ -439,7 +458,6 @@ impl<T: SubReply> Reply for Transact<T> {
         Ok(Transact::<T> { subcmd })
     }
 }
-
 
 
 #[cfg(test)]
@@ -458,7 +476,7 @@ mod tests {
         let info = Info::default(Cmd::Negotiate);
 
         // Negotiate returns a ServerSetup
-        let reply = ServerSetup::parse(&info, buffer)
+        let reply = ServerSetup::parse(info, buffer)
             .expect("can't parse negotiate body");
 
         // check reply
@@ -505,7 +523,7 @@ mod tests {
         let buffer = BytesMut::from(&blob[..]).freeze();
 
         let info = Info::default(Cmd::Negotiate);
-        let reply = SessionSetup::parse(&info, buffer)
+        let reply = SessionSetup::parse(info, buffer)
             .expect("can't parse SessionSetup");
 
         assert_eq!(reply.guest_mode, false);

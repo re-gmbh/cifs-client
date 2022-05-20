@@ -1,6 +1,9 @@
 use bitflags::bitflags;
 use bytes::{Bytes, Buf, BytesMut, BufMut};
 
+use crate::utils;
+use crate::win::ExtFileAttr;
+
 use super::Error;
 use super::info::Cmd;
 
@@ -66,5 +69,86 @@ impl AndX {
         buffer.put_u8(self.cmd as u8);
         buffer.put_u8(0);
         buffer.put_u16_le(self.offset);
+    }
+}
+
+/// Directory Info for smb::trans2::reply::FindFirst2 and
+/// smb::trans2::reply::FirstNext2, see 2.2.8.1.4.
+///
+/// Note: We use this one over the alternatives, because here we get a 64bit
+/// file size.
+#[derive(Debug)]
+pub struct DirInfo {
+    pub creation_time: u64,
+    pub access_time: u64,
+    pub write_time: u64,
+    pub change_time: u64,
+    pub filename: String,
+    pub filesize: u64,
+    pub attributes: ExtFileAttr,
+}
+
+impl DirInfo {
+    pub fn parse(mut data: Bytes) -> Result<Self, Error> {
+        if data.remaining() < 60 {
+            return Err(Error::InvalidData);
+        }
+
+        // directory info normally starts with a "next entry offset" (u32le)
+        // which i moved outside of this structure
+
+        data.advance(4);    // ignore file index as recommended by spec
+
+        // FIXME should have a real time datatime
+        let creation_time = data.get_u64_le();
+        let access_time = data.get_u64_le();
+        let write_time = data.get_u64_le();
+        let change_time = data.get_u64_le();
+
+        let filesize = data.get_u64_le();
+        data.advance(8);    // ignore allocation size, as we don't need it
+        let attributes = ExtFileAttr::from_bits_truncate(data.get_u32_le());
+        let filename_length = data.get_u32_le() as usize;
+
+        if data.remaining() < filename_length {
+            return Err(Error::InvalidData);
+        }
+
+        let raw_filename = data.copy_to_bytes(filename_length);
+
+        // FIXME: caller should inform us, if this is unicode or not
+        let filename = utils::decode_utf16le(raw_filename.as_ref())?;
+
+        let info = DirInfo {
+            creation_time,
+            access_time,
+            write_time,
+            change_time,
+            filename,
+            filesize,
+            attributes,
+        };
+
+        Ok(info)
+    }
+}
+
+bitflags! {
+    pub struct FindFlags: u16 {
+        const CLOSE_AFTER_REQ       = 0x0001;
+        const CLOSE_ON_EOS          = 0x0002;
+        const RETURN_RESUME         = 0x0004;
+        const CONTINUE_FROM_LAST    = 0x0008;
+        const WITH_BACKUP_INTENT    = 0x0010;
+    }
+
+    pub struct FindInfoLevel: u16 {
+        const STANDARD              = 0x0001;
+        const QUERY_EA_SIZE         = 0x0002;
+        const QUERY_EA_FROM_LIST    = 0x0003;
+        const DIRECTORY_INFO        = 0x0101;
+        const FULL_DIRECTORY_INFO   = 0x0102;
+        const NAMES_INFO            = 0x0103;
+        const BOTH_DIRECTORY_INFO   = 0x0104;
     }
 }

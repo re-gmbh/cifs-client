@@ -10,10 +10,10 @@ use bytes::{Bytes, BytesMut};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::win::{NotifyAction, NTStatus};
+use crate::win::{NotifyAction, NTStatus, FileAttr};
 use crate::netbios::NetBios;
 use crate::smb::info::{Info, Cmd, Status, Flags2};
-use crate::smb::{msg, reply, subcmd, Capabilities};
+use crate::smb::{msg, reply, trans, trans2, Capabilities, DirInfo};
 use crate::utils::sanitize_path;
 
 pub use error::Error;
@@ -153,11 +153,42 @@ impl Cifs {
         -> Result<Vec<(String, NotifyAction)>, Error>
     {
         // sub-command we want to run via SMB transact
-        let cmd = subcmd::NotifySetup::new(handle.fid, subcmd::NotifyMode::all(), false);
+        let cmd = trans::NotifySetup::new(handle.fid, trans::NotifyMode::all(), false);
         // get sub-command response via transact
-        let reply: subcmd::Notification = self.transact(handle.tid, cmd).await?;
+        let reply: trans::Notification = self.transact(handle.tid, cmd).await?;
 
         Ok(reply.changes)
+    }
+
+
+    pub async fn list(&mut self, share: &Share, path: &str)
+        -> Result<Vec<DirInfo>, Error>
+    {
+        // listing starts with a FindFirst2 command
+        let search = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
+        let cmd = trans2::subcmd::FindFirst2::new(sanitize_path(path), search);
+        let reply: trans2::subreply::FindFirst2 = self.transact2(share.tid, cmd).await?;
+
+        // are we done yet?
+        if reply.end {
+            return Ok(reply.info);
+        }
+
+        // we are not done: send FindNext commands until we are
+        let sid = reply.sid;
+        let mut result = reply.info;
+
+        loop {
+            let cmd = trans2::subcmd::FindNext2::new(sid, &result.last().unwrap().filename);
+            let mut reply: trans2::subreply::FindNext2 = self.transact2(share.tid, cmd).await?;
+
+            result.append(&mut reply.info);
+            if reply.end {
+                break;
+            }
+        }
+
+        Ok(result)
     }
 
 
@@ -167,16 +198,8 @@ impl Cifs {
     // private functions
     //
 
-    /// Sends a generic message M and expects result generic R. There is no
-    /// check that M and R "fit" together (like M::CMD == R::CMD), so this
-    /// is clearly not meant to be a public method.
-    /// We built safe wrapper around command, with correct message and reply
-    /// types.
-    async fn command<M,R>(&mut self, msg: M) -> Result<R, Error>
-    where
-        M: msg::Msg,
-        R: reply::Reply,
-    {
+    /// sends a message to server and returns mid used to send it.
+    async fn send<M: msg::Msg>(&mut self, msg: M) -> Result<u16, Error> {
         let mut frame_out = BytesMut::with_capacity(self.max_smb_size);
 
         // allocate a multiplex id
@@ -195,6 +218,15 @@ impl Cifs {
         msg.write(&info, &mut frame_out)?;
         self.netbios.write_frame(frame_out.freeze()).await?;
 
+        Ok(mid)
+    }
+
+
+    /// receives a reply of type R and given mid.
+    ///
+    /// Note: for simplification this function will drop any response that
+    /// does not match the given mid.
+    async fn recv<R: reply::Reply>(&mut self, mid: u16) -> Result<R, Error> {
         // wait for a frame with the correct mid
         let (info, body) = loop {
             let mut frame = self.netbios.read_frame().await?;
@@ -229,18 +261,56 @@ impl Cifs {
         }
 
         // finally parse the response body into our desired result
-        R::parse(&info, body).map_err(|e| e.into())
+        R::parse(info, body).map_err(|e| e.into())
+    }
+
+
+
+    /// Sends a generic message M and expects result generic R. There is no
+    /// check that M and R "fit" together (like M::CMD == R::CMD), so this
+    /// is clearly not meant to be a public method.
+    /// We built safe wrapper around command, with correct message and reply
+    /// types.
+    async fn command<M,R>(&mut self, msg: M) -> Result<R, Error>
+    where
+        M: msg::Msg,
+        R: reply::Reply,
+    {
+        let mid = self.send(msg).await?;
+        self.recv(mid).await
     }
 
     async fn transact<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
     where
-        C: subcmd::SubCmd,
-        R: subcmd::SubReply,
+        C: trans::SubCmd,
+        R: trans::SubReply,
     {
         let msg = msg::Transact::new(tid, cmd);
         let reply: reply::Transact<R> = self.command(msg).await?;
 
         Ok(reply.subcmd)
+    }
+
+
+    async fn transact2<C,R>(&mut self, tid: u16, subcmd: C) -> Result<R, Error>
+    where
+        C: trans2::SubCmd,
+        R: trans2::SubReply,
+    {
+        // we only send single transaction messages with the given subcommand.
+        // (in theory we could fragment the message if the subcommand is too big)
+        let mid = self.send(trans2::msg::Transact2::new(tid, subcmd)).await?;
+
+        // collect replies
+        let mut ctx = trans2::collector::CollectTrans2::new();
+        loop {
+            let reply: trans2::reply::Transact2 = self.recv(mid).await?;
+            if ctx.add(reply)? {
+                break;
+            }
+        };
+
+        Ok(ctx.get_subreply()?)
     }
 
     async fn negotiate(&mut self) -> Result<reply::ServerSetup, Error> {

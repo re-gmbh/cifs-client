@@ -22,6 +22,7 @@ pub enum NTStatus {
     NOT_IMPLEMENTED         = 0xc0000002,
     INVALID_PARAMETER       = 0xc000000d,
     NO_SUCH_DEVICE          = 0xc000000e,
+    NO_SUCH_FILE            = 0xc000000f,
     INVALID_DEVICE_REQ      = 0xc0000010,
     MORE_PROCESSING         = 0xc0000016,
     ACCESS_DENIED           = 0xc0000022,

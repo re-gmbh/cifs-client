@@ -7,10 +7,10 @@ use super::Error;
 use super::common::*;
 use super::info::*;
 use super::reply::Handle;
-use super::subcmd::SubCmd;
+use super::trans;
 
 
-pub trait Msg {
+pub(crate) trait Msg {
     const CMD: Cmd;
     const ANDX: bool;
 
@@ -514,13 +514,13 @@ impl Msg for Rmdir {
 }
 
 
-/// Parameter for SMB_COM_NT_TRANSACT with
+/// Parameter for SMB_COM_NT_TRANSACT
 pub(crate) struct Transact<T> {
     tid: u16,
     subcmd: T,
 }
 
-impl<T: SubCmd> Transact<T> {
+impl<T: trans::SubCmd> Transact<T> {
     pub(crate) fn new(tid: u16, subcmd: T) -> Self {
         Self {
             tid,
@@ -529,7 +529,7 @@ impl<T: SubCmd> Transact<T> {
     }
 }
 
-impl<T: SubCmd> Msg for Transact<T> {
+impl<T: trans::SubCmd> Msg for Transact<T> {
     const CMD: Cmd = Cmd::Transact;
     const ANDX: bool = false;
 
@@ -603,6 +603,7 @@ impl<T: SubCmd> Msg for Transact<T> {
     }
 
 }
+
 
 
 #[cfg(test)]

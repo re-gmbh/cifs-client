@@ -97,3 +97,22 @@ pub fn parse_utf16le_0(buffer: &mut Bytes) -> Result<String, ParseStrError> {
 pub fn sanitize_path(path: &str) -> String {
     path.replace('/', "\\")
 }
+
+/// returns the smallest r := 4*k with r >= n
+pub fn round_up_4n(n: usize) -> usize {
+    4 * ((n+3) / 4)
+}
+
+/// returns round_up_4n(n) - n
+pub fn fill_up_4n(n: usize) -> usize {
+    (4 - n % 4) % 4
+}
+
+/// try subtracting b from a and return None in case of underflow
+pub fn try_sub(a: usize, b: usize) -> Option<usize> {
+    if a < b {
+        None
+    } else {
+        Some(a - b)
+    }
+}
