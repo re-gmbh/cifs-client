@@ -1,4 +1,5 @@
 use bytes::{Bytes, Buf};
+use chrono::{DateTime, Local};
 
 use crate::utils;
 use crate::win::*;
@@ -65,7 +66,7 @@ pub struct ServerSetup {
     pub max_raw_size: u32,
     pub session_key: u32,
     pub capabilities: Capabilities,
-    pub system_time: u64,
+    pub system_time: DateTime<Local>,
     pub timezone: u16,
     pub challenge_length: u8,
     pub server_guid: Bytes,
@@ -103,7 +104,7 @@ impl Reply for ServerSetup {
         let max_raw_size = parameter.get_u32_le();
         let session_key = parameter.get_u32_le();
         let capabilities = Capabilities::from_bits_truncate(parameter.get_u32_le());
-        let system_time = parameter.get_u64_le();
+        let system_time = utils::decode_windows_time(parameter.get_u64_le());
         let timezone = parameter.get_u16_le();
         let challenge_length = parameter.get_u8();
 
@@ -500,7 +501,8 @@ mod tests {
                                      | Capabilities::UNICODE
                                      | Capabilities::RAW_MODE);
 
-        assert_eq!(reply.system_time, 0x01d83e9bb7b66d8e);// FIXME implement windows time type
+        assert_eq!(reply.system_time.timestamp(), 1648029153);
+
         assert_eq!(reply.timezone, 0);
         assert_eq!(reply.challenge_length, 0);
         assert_eq!(&reply.server_guid[..], hex!("f9fe3c88bf27b444bd3d74f7b2fdbf01"));
