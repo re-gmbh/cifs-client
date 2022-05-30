@@ -368,7 +368,7 @@ impl Close {
         }
     }
 
-    pub fn handle(file: Handle) -> Self {
+    pub fn handle(file: &Handle) -> Self {
         Self::new(file.tid, file.fid)
     }
 }
