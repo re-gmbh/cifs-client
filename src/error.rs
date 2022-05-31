@@ -35,7 +35,7 @@ impl fmt::Display for Error {
             Error::FrameTooBig => write!(f, "frame exceeds maximal size"),
             Error::UnexpectedReply(want,got) => write!(f, "unexpected reply, want: {:?}, got: {:?}", want, got),
             Error::TooManyReplies(num) => write!(f, "we expect one reply but got {}", num),
-            Error::ServerError(status) => write!(f, "server reports error: {}", status),
+            Error::ServerError(status) => write!(f, "server error: {}", status),
             Error::Unsupported(what) => write!(f, "unsupported feature: {}", what),
             Error::InvalidUri => write!(f, "URI is invalid"),
         }

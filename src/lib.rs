@@ -32,7 +32,6 @@ pub struct Cifs {
     mid: u16,
 }
 
-
 impl Cifs {
     pub fn new(stream: TcpStream, maybe_auth: Option<Auth>) -> Self {
         let guest_auth = Auth {
@@ -99,9 +98,13 @@ impl Cifs {
         self.command(msg::TreeConnect::new(sanitize_path(path), password.to_owned())).await
     }
 
-    pub async fn umount(&mut self, share: Share) -> Result<(), Error> {
+    pub async fn umount_ref(&mut self, share: &Share) -> Result<(), Error> {
         let _: reply::TreeDisconnect = self.command(msg::TreeDisconnect::new(share.tid)).await?;
         Ok(())
+    }
+
+    pub async fn umount(&mut self, share: Share) -> Result<(), Error> {
+        self.umount_ref(&share).await
     }
 
     pub async fn openfile(&mut self, share: &Share, path: &str)
@@ -116,10 +119,15 @@ impl Cifs {
         self.command(msg::Open::dir(share.tid, sanitize_path(path))).await
     }
 
-    pub async fn close(&mut self, file: Handle) -> Result<(), Error> {
+    pub async fn close_ref(&mut self, file: &Handle) -> Result<(), Error> {
         let _: reply::Close = self.command(msg::Close::handle(file)).await?;
         Ok(())
     }
+
+    pub async fn close(&mut self, file: Handle) -> Result<(), Error> {
+        self.close_ref(&file).await
+    }
+
 
     pub async fn read(&mut self, file: &Handle, offset: u64) -> Result<Bytes, Error> {
         let reply: reply::Read = self.command(msg::Read::handle(file, offset)).await?;
@@ -354,26 +362,72 @@ impl Cifs {
     }
 }
 
+
+
+/// Struct for holding the result of resolve_smb_uri
+pub struct CifsConfig<'a> {
+    pub domain: Option<&'a str>,
+    pub user: Option<&'a str>,
+    pub password: Option<&'a str>,
+    pub hostname: &'a str,
+    pub port: Option<u16>,
+    pub share: &'a str,
+    pub path: Option<&'a str>,
+}
+
+
 ///
-/// Helper function that decodes an SMB URI and returns
-/// (host, port, share, path).
+/// Helper function that decodes an SMB URI and returns a CifsConfig
 ///
-pub fn resolve_smb_uri(uri: &str) -> Result<(&str, Option<&str>, &str, &str), Error> {
+pub fn resolve_smb_uri<'a>(uri: &'a str) -> Result<CifsConfig<'a>, Error> {
     lazy_static! {
         static ref URI_REGEX: Regex =
-            Regex::new(r"smb://(?P<host>\w[\w\.-]*)(:(?P<port>\d+))?/(?P<share>[\w\._-]+)(/(?P<path>.*))?")
+            Regex::new(r"smb://((?P<domain>\w+);)?((?P<user>[\w\.\+_-]+)(:(?P<passwd>[^@]*))?@)?(?P<host>\w[\w\.-]*)(:(?P<port>\d+))?/(?P<share>[\w\._-]+)(/(?P<path>.*))?")
                 .expect("can't compile URI regex");
     }
 
-    let uri_match = URI_REGEX.captures(uri).ok_or(Error::InvalidUri)?;
+    let uri_match = URI_REGEX
+        .captures(uri)
+        .ok_or(Error::InvalidUri)?;
 
-    let hostname = uri_match.name("host").ok_or(Error::InvalidUri)?.as_str();
-    let maybe_port = uri_match.name("port").map(|m| m.as_str());
-    let sharename = uri_match.name("share").ok_or(Error::InvalidUri)?.as_str();
-    let pathname = uri_match.name("path").map(|m| m.as_str()).unwrap_or("");
 
-    Ok((hostname, maybe_port, sharename, pathname))
+    let config = CifsConfig {
+        domain: uri_match
+            .name("domain")
+            .map(|m| m.as_str()),
+
+        user: uri_match
+            .name("user")
+            .map(|m| m.as_str()),
+
+        password: uri_match
+            .name("passwd")
+            .map(|m| m.as_str()),
+
+        hostname: uri_match
+            .name("host")
+            .ok_or(Error::InvalidUri)?
+            .as_str(),
+
+        port: uri_match
+            .name("port")
+            .map(|m| u16::from_str_radix(m.as_str(), 10))
+            .transpose()
+            .map_err(|_| Error::InvalidUri)?,
+
+        share: uri_match
+            .name("share")
+            .ok_or(Error::InvalidUri)?
+            .as_str(),
+
+        path: uri_match
+            .name("path")
+            .map(|m| m.as_str()),
+    };
+
+    Ok(config)
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -382,24 +436,74 @@ mod tests {
     #[test]
     fn test_uri() {
         let uri = "smb://localhost/myshare/this/is/a/path";
-        let (host, port, share, path) = resolve_smb_uri(uri).unwrap();
-        assert_eq!(host, "localhost");
-        assert_eq!(port, None);
-        assert_eq!(share, "myshare");
-        assert_eq!(path, "this/is/a/path");
+        let config = resolve_smb_uri(uri).unwrap();
+
+        assert_eq!(config.domain, None);
+        assert_eq!(config.user, None);
+        assert_eq!(config.password, None);
+        assert_eq!(config.hostname, "localhost");
+        assert_eq!(config.port, None);
+        assert_eq!(config.share, "myshare");
+        assert_eq!(config.path, Some("this/is/a/path"));
 
         let uri = "smb://www.example.org:31337/foo";
-        let (host, port, share, path) = resolve_smb_uri(uri).unwrap();
-        assert_eq!(host, "www.example.org");
-        assert_eq!(port, Some("31337"));
-        assert_eq!(share, "foo");
-        assert_eq!(path, "");
+        let config = resolve_smb_uri(uri).unwrap();
+        assert_eq!(config.domain, None);
+        assert_eq!(config.user, None);
+        assert_eq!(config.password, None);
+        assert_eq!(config.hostname, "www.example.org");
+        assert_eq!(config.port, Some(31337));
+        assert_eq!(config.share, "foo");
+        assert_eq!(config.path, None);
 
         let uri = "smb://127.0.0.1:445/share/foo";
-        let (host, port, share, path) = resolve_smb_uri(uri).unwrap();
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, Some("445"));
-        assert_eq!(share, "share");
-        assert_eq!(path, "foo");
+        let config = resolve_smb_uri(uri).unwrap();
+        assert_eq!(config.domain, None);
+        assert_eq!(config.user, None);
+        assert_eq!(config.password, None);
+        assert_eq!(config.hostname, "127.0.0.1");
+        assert_eq!(config.port, Some(445));
+        assert_eq!(config.share, "share");
+        assert_eq!(config.path, Some("foo"));
+
+        let uri = "smb://anonymous@localhost/public";
+        let config = resolve_smb_uri(uri).unwrap();
+        assert_eq!(config.domain, None);
+        assert_eq!(config.user, Some("anonymous"));
+        assert_eq!(config.password, None);
+        assert_eq!(config.hostname, "localhost");
+        assert_eq!(config.port, None);
+        assert_eq!(config.share, "public");
+        assert_eq!(config.path, None);
+
+        let uri = "smb://john:secret@localhost/closed";
+        let config = resolve_smb_uri(uri).unwrap();
+        assert_eq!(config.domain, None);
+        assert_eq!(config.user, Some("john"));
+        assert_eq!(config.password, Some("secret"));
+        assert_eq!(config.hostname, "localhost");
+        assert_eq!(config.port, None);
+        assert_eq!(config.share, "closed");
+        assert_eq!(config.path, None);
+
+        let uri = "smb://WORKGROUP;foo/bar";
+        let config = resolve_smb_uri(uri).unwrap();
+        assert_eq!(config.domain, Some("WORKGROUP"));
+        assert_eq!(config.user, None);
+        assert_eq!(config.password, None);
+        assert_eq!(config.hostname, "foo");
+        assert_eq!(config.port, None);
+        assert_eq!(config.share, "bar");
+        assert_eq!(config.path, None);
+
+        let uri = "smb://NOSTROMO;Ellen.Ripley:100375@Mother:445/interface/special/order/937.txt";
+        let config = resolve_smb_uri(uri).unwrap();
+        assert_eq!(config.domain, Some("NOSTROMO"));
+        assert_eq!(config.user, Some("Ellen.Ripley"));
+        assert_eq!(config.password, Some("100375"));
+        assert_eq!(config.hostname, "Mother");
+        assert_eq!(config.port, Some(445));
+        assert_eq!(config.share, "interface");
+        assert_eq!(config.path, Some("special/order/937.txt"));
     }
 }
