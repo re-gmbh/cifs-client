@@ -34,9 +34,10 @@ pub trait SubReply: Sized {
 
 
 
-/// NT_TRANSACT_NOTIFY_CHANGE Subcommand for msg::Transact: This command notifies
-/// the client of anything that changed in the directory given by fid.
-/// The command is single-shot and must be resend for getting more changes.
+/// NT_TRANSACT_NOTIFY_CHANGE Subcommand for msg::Transact, see 2.2.7.4:
+/// This command notifies the client of anything that changed in the directory
+/// given by fid. The command is single-shot and must be resend for getting more
+/// changes.
 pub struct NotifySetup {
     fid: u16,
     recursive: bool,
@@ -127,6 +128,9 @@ impl SubReply for Notification {
 
         loop {
             let mut parser = parameter.slice(start..);
+            if parser.len() == 0 {
+                break;
+            }
             if parser.len() < 4 {
                 return Err(Error::InvalidData);
             }
