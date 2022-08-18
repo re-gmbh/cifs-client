@@ -41,12 +41,15 @@ impl SubReply for FindFirst2 {
                 return Err(Error::InvalidData);
             }
 
-            let rawsize = data.get_u32_le();
-            if rawsize < 4 {
+            let next_entry = data.get_u32_le();
+            let size = if next_entry == 0 {
+                data.remaining()
+            } else if next_entry >= 4 {
+                (next_entry - 4) as usize
+            } else {
                 return Err(Error::InvalidData);
-            }
+            };
 
-            let size = (rawsize - 4) as usize;
             if size == 0 {
                 break;
             }
