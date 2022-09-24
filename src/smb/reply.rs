@@ -12,12 +12,12 @@ use super::trans;
 /// Helper struct holding all relevant information of a reply
 /// to be used by create() method.
 pub(crate) struct ReplyCtx {
-    pub info: Info,
+    pub(super) info: Info,
 
-    pub parameter: Bytes,
+    pub(super) parameter: Bytes,
 
-    pub data: Bytes,
-    pub data_offset: usize,
+    pub(super) data: Bytes,
+    pub(super) data_offset: usize,
 }
 
 
@@ -68,8 +68,7 @@ pub struct ServerSetup {
     pub capabilities: Capabilities,
     pub system_time: DateTime<Local>,
     pub timezone: u16,
-    pub challenge_length: u8,
-    pub server_guid: Bytes,
+    pub challenge: Bytes,
 }
 
 impl Reply for ServerSetup {
@@ -106,18 +105,19 @@ impl Reply for ServerSetup {
         let capabilities = Capabilities::from_bits_truncate(parameter.get_u32_le());
         let system_time = utils::decode_windows_time(parameter.get_u64_le());
         let timezone = parameter.get_u16_le();
-        let challenge_length = parameter.get_u8();
+        let challenge_length = parameter.get_u8() as usize;
 
 
         //
         // Now parse data
         //
         let mut data = ctx.data;
-        if data.len() < 16 {
+
+        // read challenge, if we got any
+        if data.len() < challenge_length {
             return Err(Error::InvalidData);
         }
-
-        let server_guid = data.copy_to_bytes(16);
+        let challenge = data.copy_to_bytes(challenge_length);
 
 
         let reply = Self {
@@ -131,8 +131,7 @@ impl Reply for ServerSetup {
             capabilities,
             system_time,
             timezone,
-            challenge_length,
-            server_guid,
+            challenge,
         };
 
         Ok(reply)
@@ -144,8 +143,8 @@ impl Reply for ServerSetup {
 #[derive(Debug)]
 pub struct SessionSetup {
     pub guest_mode: bool,
-    pub security_blob: Bytes,
     pub uid: u16,
+    pub security_blob: Bytes,
 }
 
 impl Reply for SessionSetup {
@@ -153,10 +152,17 @@ impl Reply for SessionSetup {
     const ANDX: bool = true;
 
     fn create(ctx: ReplyCtx) -> Result<Self, Error> {
+
+
         // parse parameter
         let mut parameter = ctx.parameter;
         let action = parameter.get_u16_le();
-        let blob_length = parameter.get_u16_le() as usize;
+
+        let blob_length = if parameter.remaining() >= 2 {
+            parameter.get_u16_le() as usize
+        } else {
+            0
+        };
 
         // parse data
         let mut data = ctx.data;
@@ -166,7 +172,7 @@ impl Reply for SessionSetup {
         //let os_name = read_unicode_str0(&mut data);
         //let lanman = read_unicode_str0(&mut data);
 
-        // build reply
+        // build reply, take uid from smb header
         let reply = SessionSetup {
             guest_mode: action & 0x0001 == 1,
             security_blob: blob,
@@ -191,8 +197,8 @@ impl Reply for SessionSetup {
 ///
 #[derive(Debug)]
 pub struct Share {
-    pub access_rights: DirAccessMask,
-    pub guest_rights: DirAccessMask,
+    pub access_rights: Option<DirAccessMask>,
+    pub guest_rights: Option<DirAccessMask>,
     pub service: String,
     pub filesystem: String,
     pub tid: u16,
@@ -207,8 +213,18 @@ impl Reply for Share {
         // parameter
         let mut parameter = ctx.parameter;
         parameter.advance(2);       // ignore optional support
-        let access_rights = DirAccessMask::from_bits_truncate(parameter.get_u32_le());
-        let guest_rights = DirAccessMask::from_bits_truncate(parameter.get_u32_le());
+
+        let access_rights = if parameter.remaining() >= 4 {
+            Some(DirAccessMask::from_bits_truncate(parameter.get_u32_le()))
+        } else {
+            None
+        };
+
+        let guest_rights = if parameter.remaining() >= 4 {
+            Some(DirAccessMask::from_bits_truncate(parameter.get_u32_le()))
+        } else {
+            None
+        };
 
         // data
         let mut data = ctx.data;

@@ -105,11 +105,41 @@ pub struct SessionSetup {
     pub vc_number: u16,
     pub session_key: u32,
     pub capabilities: Capabilities,
-    pub security_blob: Bytes,
+    mode: SessionSetupMode,
+}
+
+enum SessionSetupMode {
+    Classic {
+        user: String,
+        domain: String,
+        secret: [u8; 24],
+    },
+
+    Extended { blob: Bytes },
 }
 
 impl SessionSetup {
-    pub fn new(auth_blob: Bytes) -> Self {
+    pub fn with_auth(user: String, domain: String, secret: [u8; 24]) -> Self {
+        let mode = SessionSetupMode::Classic { user, domain, secret };
+
+        let caps = Capabilities::UNICODE
+                 | Capabilities::LARGE_FILES
+                 | Capabilities::NT_SMBS
+                 | Capabilities::NTSTATUS;
+
+
+        SessionSetup {
+            max_buffer_size: 65535,
+            max_mpx_count: 0,
+            vc_number: 0,
+            session_key: 0,
+            capabilities: caps,
+            mode,
+        }
+    }
+    pub fn with_blob(blob: Bytes) -> Self {
+        let mode = SessionSetupMode::Extended { blob };
+
         let caps = Capabilities::UNICODE
                  | Capabilities::LARGE_FILES
                  | Capabilities::NT_SMBS
@@ -123,7 +153,7 @@ impl SessionSetup {
             vc_number: 0,
             session_key: 0,
             capabilities: caps,
-            security_blob: auth_blob,
+            mode,
         }
     }
 }
@@ -135,29 +165,59 @@ impl Msg for SessionSetup {
     fn body(&self, info: &Info, parameter: &mut BytesMut, data: &mut BytesMut)
         -> Result<(), Error>
     {
-        // safety
-        let blob_len: u16 = self.security_blob
-            .len()
-            .try_into()
-            .map_err(|_| Error::CreatePackage("security_blob in SessionSetup is too big".to_owned()))?;
-
         // parameter
         parameter.put_u16_le(self.max_buffer_size);
         parameter.put_u16_le(self.max_mpx_count);
         parameter.put_u16_le(self.vc_number);
         parameter.put_u32_le(self.session_key);
-        parameter.put_u16_le(blob_len);
-        parameter.put_u32_le(0);
+
+        match &self.mode {
+            SessionSetupMode::Classic { secret, .. } => {
+                let secret_len: u16 = secret
+                    .len()
+                    .try_into()
+                    .map_err(|_| Error::CreatePackage("secret in SessionSetup too big".to_owned()))?;
+
+                parameter.put_u16_le(secret_len);
+                parameter.put_u16_le(secret_len);
+            }
+
+            SessionSetupMode::Extended { blob } => {
+                let blob_len: u16 = blob
+                    .len()
+                    .try_into()
+                    .map_err(|_| Error::CreatePackage("blob in SessionSetup too big".to_owned()))?;
+
+                parameter.put_u16_le(blob_len);
+            }
+        }
+
+        parameter.put_u32_le(0);        // reserved
         parameter.put_u32_le(self.capabilities.bits());
 
         // data
-        data.put(self.security_blob.as_ref());
+        match &self.mode {
+            SessionSetupMode::Classic { user, domain, secret } => {
+                data.put(secret.as_ref());
+                data.put(secret.as_ref());
+                // 16bit alignment padding
+                if data.len() % 2 == 0 {
+                    data.put_u8(0);
+                }
+                data.put(utils::encode_utf16le_0(user).as_ref());
+                data.put(utils::encode_utf16le_0(domain).as_ref());
+            }
+
+            SessionSetupMode::Extended { blob } => {
+                data.put(blob.as_ref());
+                // 16bit alignment pad for unicode
+                if blob.len() % 2 == 0 {
+                    data.put_u8(0);
+                }
+            }
+        }
 
         if info.flags2.contains(Flags2::UNICODE) {
-            // 16bit alignment pad for unicode
-            if self.security_blob.len() % 2 == 0 {
-                data.put_u8(0);
-            }
             data.put_u16_le(0); // os_name: just zero-terminatation
             data.put_u16_le(0); // lanman: just zero-terminatation
         } else {

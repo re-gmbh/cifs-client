@@ -5,7 +5,6 @@ mod smb;
 mod netbios;
 mod utils;
 
-use tokio::net::TcpStream;
 use bytes::{Bytes, BytesMut};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -33,60 +32,37 @@ pub struct Cifs {
 }
 
 impl Cifs {
-    pub fn new(stream: TcpStream, maybe_auth: Option<Auth>) -> Self {
-        let guest_auth = Auth {
+    pub async fn open(host: &str, port: Option<u16>, maybe_auth: Option<Auth>)
+        -> Result<Self, Error>
+    {
+        let auth = maybe_auth.unwrap_or(Auth {
             user: String::new(),
             password: String::new(),
             domain: "WORKGROUP".to_owned(),
             workstation: std::env::var("HOSTNAME")
                 .unwrap_or("localhost".to_owned()),
+        });
+
+        let netbios = match port {
+            Some(port) => NetBios::open_raw(host, port).await?,
+            None => NetBios::open(host, &auth.workstation).await?,
         };
 
-        Cifs {
-            netbios: NetBios::new(stream),
-            auth: maybe_auth.unwrap_or(guest_auth),
+        let mut cifs = Cifs {
+            netbios,
+            auth,
 
             max_smb_size: 1024,
             use_unicode: true,
             uid: 0,
             mid: 0,
-        }
-    }
-
-
-    pub async fn connect(&mut self) -> Result<(), Error> {
-        let server_setup = self.negotiate().await?;
-
-        // update connection options based on what we learned
-        self.max_smb_size = server_setup.max_buffer_size as usize;
-        self.use_unicode = server_setup.capabilities.contains(Capabilities::UNICODE);
-
-        let ntlm_init = {
-            let mut ntlm_init_msg = ntlm::InitMsg::new(
-                 ntlm::Flags::UNICODE
-               | ntlm::Flags::OEM
-               | ntlm::Flags::REQUEST_TARGET
-               | ntlm::Flags::NTLM
-               | ntlm::Flags::DOMAIN_SUPPLIED
-               | ntlm::Flags::WORKSTATION_SUPPLIED);
-
-            ntlm_init_msg.set_origin(&self.auth.domain, &self.auth.workstation);
-            ntlm_init_msg.set_default_version();
-            ntlm_init_msg.to_bytes()?
         };
 
-        let setup_reply = self.session_setup(ntlm_init).await?;
+        cifs.setup_connection().await?;
 
-        // take over uid the server gave us
-        self.uid = setup_reply.uid;
-
-        // try to parse security blob into ntlm challenge and calculate response
-        let ntlm_challenge = ntlm::ChallengeMsg::parse(&setup_reply.security_blob)?;
-        let ntlm_response = ntlm_challenge.response(&self.auth)?;
-        let _ = self.session_setup(ntlm_response).await?;
-
-        Ok(())
+        Ok(cifs)
     }
+
 
     pub async fn mount(&mut self, path: &str) -> Result<Share, Error> {
         self.mount_password(path, "").await
@@ -235,6 +211,65 @@ impl Cifs {
     //
     // private functions
     //
+    async fn setup_connection(&mut self) -> Result<(), Error> {
+        let server_setup = self.negotiate().await?;
+
+        // update connection options based on what we learned
+        self.max_smb_size = server_setup.max_buffer_size as usize;
+        self.use_unicode = server_setup.capabilities.contains(Capabilities::UNICODE);
+
+        if server_setup.capabilities.contains(Capabilities::EXTENDED_SECURITY) {
+            self.authenticate_ntlmv2().await
+        } else {
+            self.authenticate_ntlm(server_setup.challenge).await
+        }
+    }
+
+    async fn authenticate_ntlm(&mut self, challenge: Bytes) -> Result<(), Error> {
+        // TODO: can we do this without clone?
+        let setup_reply = self.session_setup(
+            self.auth.user.clone(),
+            self.auth.domain.clone(),
+            self.auth.ntlmv1_authenticate(challenge.as_ref()),
+        ).await?;
+
+        self.uid = setup_reply.uid;
+
+        Ok(())
+    }
+
+
+    async fn authenticate_ntlmv2(&mut self) -> Result<(), Error> {
+        // initialize ntlm (also called type 1 message)
+        let ntlm_init = {
+            let mut ntlm_init_msg = ntlm::InitMsg::new(
+                 ntlm::Flags::UNICODE
+               | ntlm::Flags::OEM
+               | ntlm::Flags::REQUEST_TARGET
+               | ntlm::Flags::NTLM
+               | ntlm::Flags::DOMAIN_SUPPLIED
+               | ntlm::Flags::WORKSTATION_SUPPLIED);
+
+            ntlm_init_msg.set_origin(&self.auth.domain, &self.auth.workstation);
+            ntlm_init_msg.set_default_version();
+            ntlm_init_msg.to_bytes()?
+        };
+
+        let setup_reply = self.session_setup_ntlmv2(ntlm_init).await?;
+
+        // take over uid the server gave us
+        self.uid = setup_reply.uid;
+
+        // try to parse security blob into ntlm challenge (also called type 2 message)
+        let ntlm_challenge = ntlm::ChallengeMsg::parse(&setup_reply.security_blob)?;
+
+        // calculate and send ntlm response (type 3 message)
+        let ntlm_response = ntlm_challenge.response(&self.auth)?;
+        let _ = self.session_setup_ntlmv2(ntlm_response).await?;
+
+        Ok(())
+    }
+
 
     /// sends a message to server and returns mid used to send it.
     async fn send<M: msg::Msg>(&mut self, msg: M) -> Result<u16, Error> {
@@ -254,7 +289,7 @@ impl Cifs {
 
         // add message body to frame and send it
         msg.write(&info, &mut frame_out)?;
-        self.netbios.write_frame(frame_out.freeze()).await?;
+        self.netbios.send_message(frame_out.freeze()).await?;
 
         Ok(mid)
     }
@@ -267,7 +302,7 @@ impl Cifs {
     async fn recv<R: reply::Reply>(&mut self, mid: u16) -> Result<R, Error> {
         // wait for a frame with the correct mid
         let (info, body) = loop {
-            let mut frame = self.netbios.read_frame().await?;
+            let mut frame = self.netbios.recv_message().await?;
             let info = Info::parse(&mut frame)?;
             if info.mid == mid {
                 break (info, frame);
@@ -289,13 +324,6 @@ impl Cifs {
             }
         } else {
             return Err(Error::ServerError(info.status));
-        }
-
-        // if extended_security is not set, we have to parse
-        // negotiate reply differently. until we support that
-        // we throw an error...
-        if !info.flags2.contains(Flags2::EXTENDED_SECURITY) {
-            return Err(Error::Unsupported("reply without extended security".to_owned()));
         }
 
         // finally parse the response body into our desired result
@@ -355,10 +383,16 @@ impl Cifs {
         self.command(msg::Negotiate{}).await
     }
 
-    async fn session_setup(&mut self, blob: Bytes)
+    async fn session_setup(&mut self, user: String, domain: String, secret: [u8; 24])
         -> Result<reply::SessionSetup, Error>
     {
-        self.command(msg::SessionSetup::new(blob)).await
+        self.command(msg::SessionSetup::with_auth(user, domain, secret)).await
+    }
+
+    async fn session_setup_ntlmv2(&mut self, blob: Bytes)
+        -> Result<reply::SessionSetup, Error>
+    {
+        self.command(msg::SessionSetup::with_blob(blob)).await
     }
 }
 

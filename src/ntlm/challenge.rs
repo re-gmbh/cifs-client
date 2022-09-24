@@ -49,7 +49,7 @@ impl ChallengeMsg {
     }
 
     pub fn response(&self, auth: &Auth) -> Result<Bytes, Error> {
-        let (_sk, response) = auth.authenticate(self)?;
+        let (_sk, response) = auth.ntlmv2_authenticate(self)?;
 
         let mut packet = Packet::new();
         packet.append_binary(NTLMSSP_MAGIC);

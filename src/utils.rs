@@ -1,8 +1,24 @@
+use std::iter;
 use chrono::{DateTime, TimeZone, Utc, Local, Duration};
 use md4::Md4;
 use md5::{Digest, Md5};
 use hmac::{Hmac, Mac};
+use des::Des;
+use des::cipher::{KeyInit, BlockEncrypt, generic_array::GenericArray};
 use bytes::{Bytes, Buf};
+
+pub fn encode_netbios_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii())
+        .chain(iter::repeat(' '))
+        .take(16)
+        .flat_map(|c| {
+            let h = char::from_u32(65 + (c as u32/16)).unwrap();
+            let l = char::from_u32(65 + (c as u32 % 16)).unwrap();
+            [h, l]
+        })
+        .collect()
+}
 
 /// From MS-DYTP 2.2.3: FILETIME is a 64bit value, representing the
 /// number of 100-nanosecond intervals that have elapsed since January
@@ -29,7 +45,7 @@ pub fn get_windows_time() -> u64 {
 }
 
 pub fn hmac_md5_oneshot(key: &[u8], data: &[u8]) -> [u8; 16] {
-    let mut mac = Hmac::<Md5>::new_from_slice(key)
+    let mut mac = <Hmac::<Md5> as Mac>::new_from_slice(key)
             .expect("Invalid key length in HMAC - this should not happen");
 
     mac.update(data);
@@ -128,6 +144,33 @@ pub fn try_sub(a: usize, b: usize) -> Option<usize> {
         Some(a - b)
     }
 }
+
+
+fn expand_des_key(data: &[u8]) -> [u8; 8] {
+    let mut padded = [0u8; 8];
+    padded[1..1+data.len()].clone_from_slice(data);
+
+    let mut value = u64::from_be_bytes(padded);
+    let mut result: u64 = 0;
+
+    for i in 0..8 {
+        result |= (value & 0x7f) << (i*8+1);
+        value >>= 7;
+    }
+
+    result.to_be_bytes()
+}
+
+pub fn des_oneshot(secret: &[u8], input: &[u8], output: &mut [u8]) {
+    let key = expand_des_key(secret);
+    let cipher = Des::new_from_slice(&key).unwrap();
+    let array_in = GenericArray::from_slice(input);
+    let mut array_out = GenericArray::from_mut_slice(output);
+    cipher.encrypt_block_b2b(&array_in, &mut array_out);
+}
+
+
+
 
 #[cfg(test)]
 mod tests {

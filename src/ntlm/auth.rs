@@ -24,23 +24,18 @@ impl Auth {
         }
     }
 
-    /// Hash like we are in the 90s, using windows and maybe took something
-    /// illegal. Please understand that this is possibly the worst password
-    /// hash ever devised!
-    fn ntlm_hash(&self) -> [u8; 16] {
-        let unicoded = utils::encode_utf16le(&self.password);
-        utils::md4_oneshot(&unicoded)
+    pub(crate) fn ntlmv1_authenticate(&self, challenge: &[u8]) -> [u8; 24] {
+        let mut result: [u8; 24] = [0; 24];
+
+        let hash = self.ntlm_hash();
+        utils::des_oneshot(&hash[0..7], challenge, &mut result[0..8]);
+        utils::des_oneshot(&hash[7..14], challenge, &mut result[8..16]);
+        utils::des_oneshot(&hash[14..16], challenge, &mut result[16..24]);
+
+        result
     }
 
-    /// Version 2 is still pretty stupid..
-    fn ntlmv2_hash(&self) -> [u8; 16] {
-        let key = self.ntlm_hash();
-        let data = utils::encode_utf16le(&(self.user.to_uppercase() + &self.domain));
-
-        utils::hmac_md5_oneshot(&key, &data)
-    }
-
-    pub fn authenticate(&self, challenge_msg: &ChallengeMsg) -> Result<([u8; 16], Bytes), Error> {
+    pub(crate) fn ntlmv2_authenticate(&self, challenge_msg: &ChallengeMsg) -> Result<([u8; 16], Bytes), Error> {
         let mut random = [0u8; 8];
         OsRng.fill_bytes(&mut random);
 
@@ -49,8 +44,6 @@ impl Auth {
         blob.put(hex!("0101000000000000").as_slice());
         blob.put_u64_le(utils::get_windows_time());
         blob.put(random.as_slice());
-        //blob.put(hex!("0090d336b734c301").as_slice()); // XXX fake time
-        //blob.put(hex!("ffffff0011223344").as_slice()); // XXX fake random
         blob.put_u32_le(0);
         blob.extend_from_slice(&challenge_msg.info[..]);
         blob.put_u32_le(0);
@@ -69,6 +62,18 @@ impl Auth {
         result.put(blob);
 
         Ok((sk, result.freeze()))
+    }
+
+    fn ntlm_hash(&self) -> [u8; 16] {
+        let unicoded = utils::encode_utf16le(&self.password);
+        utils::md4_oneshot(&unicoded)
+    }
+
+    fn ntlmv2_hash(&self) -> [u8; 16] {
+        let key = self.ntlm_hash();
+        let data = utils::encode_utf16le(&(self.user.to_uppercase() + &self.domain));
+
+        utils::hmac_md5_oneshot(&key, &data)
     }
 }
 
