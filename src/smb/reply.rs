@@ -520,8 +520,7 @@ mod tests {
         assert_eq!(reply.system_time.timestamp(), 1648029153);
 
         assert_eq!(reply.timezone, 0);
-        assert_eq!(reply.challenge_length, 0);
-        assert_eq!(&reply.server_guid[..], hex!("f9fe3c88bf27b444bd3d74f7b2fdbf01"));
+        assert_eq!(reply.challenge.len(), 0);
     }
 
 

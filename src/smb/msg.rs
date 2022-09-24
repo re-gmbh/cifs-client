@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn create_session_setup() {
 
-        let security_blob = Bytes::from(hex!(
+        let blob = Bytes::from(hex!(
             "4e544c4d5353500001000000978208e200000000000000000000000000000000"
             "0a00614a0000000f").as_ref());
 
@@ -700,13 +700,15 @@ mod tests {
                          | Capabilities::DYNAMIC_REAUTH
                          | Capabilities::EXTENDED_SECURITY;
 
+        let mode = SessionSetupMode::Extended { blob };
+
         let msg = SessionSetup {
             max_buffer_size: 4356,
             max_mpx_count: 16,
             vc_number: 0,
             session_key: 0,
             capabilities,
-            security_blob: security_blob,
+            mode,
         };
 
         let mut buffer = BytesMut::with_capacity(SMB_MAX_LEN);
