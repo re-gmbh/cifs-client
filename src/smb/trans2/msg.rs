@@ -38,12 +38,12 @@ impl<T: SubCmd> Msg for Transact2<T> {
         let sub_parameter = self.subcmd.parameter()?;
         let sub_parameter_len: u16 = sub_parameter.len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("parameter transaction2 sub-command is too large".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("parameter transaction2 sub-command is too large".to_owned()))?;
 
         let sub_data = self.subcmd.data()?;
         let sub_data_len: u16 = sub_data.len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("data of transaction2 sub-command is too large".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("data of transaction2 sub-command is too large".to_owned()))?;
 
         // position of data relative to SMB header
         let data_start = SMB_HEADER_LEN + 1 + 30 + 2;
