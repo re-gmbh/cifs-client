@@ -30,7 +30,7 @@ pub(crate) trait Msg {
     /// header info is assumed to be already written and given here for
     /// information only.
     fn write(&self, info: &Info, buffer: &mut BytesMut) -> Result<(), Error> {
-        // create space for package parameter and data
+        // create space for packet parameter and data
         let mut parameter = BytesMut::with_capacity(2*255);
         let mut data = BytesMut::with_capacity(SMB_MAX_LEN);
 
@@ -45,26 +45,26 @@ pub(crate) trait Msg {
         self.body(&info, &mut parameter, &mut data)?;
 
 
-        // write package parameter
+        // write packet parameter
         let parameter_len: u8 = (parameter.len() / 2)
             .try_into()
-            .map_err(|_| Error::CreatePackage("parameter length too big".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("parameter length too big".to_owned()))?;
 
         if parameter.len() > buffer.remaining_mut() {
-            return Err(Error::CreatePackage("package buffer too small for parameter".to_owned()));
+            return Err(Error::CreatePacket("packet buffer too small for parameter".to_owned()));
         }
 
         buffer.put_u8(parameter_len);
         buffer.put(parameter);
 
-        // write package data
+        // write packet data
         let data_len: u16 = data
             .len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("data length too big".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("data length too big".to_owned()))?;
 
         if data.len() > buffer.remaining_mut() {
-            return Err(Error::CreatePackage("package buffer too small for data".to_owned()));
+            return Err(Error::CreatePacket("packet buffer too small for data".to_owned()));
         }
 
         buffer.put_u16_le(data_len);
@@ -176,7 +176,7 @@ impl Msg for SessionSetup {
                 let secret_len: u16 = secret
                     .len()
                     .try_into()
-                    .map_err(|_| Error::CreatePackage("secret in SessionSetup too big".to_owned()))?;
+                    .map_err(|_| Error::CreatePacket("secret in SessionSetup too big".to_owned()))?;
 
                 parameter.put_u16_le(secret_len);
                 parameter.put_u16_le(secret_len);
@@ -186,7 +186,7 @@ impl Msg for SessionSetup {
                 let blob_len: u16 = blob
                     .len()
                     .try_into()
-                    .map_err(|_| Error::CreatePackage("blob in SessionSetup too big".to_owned()))?;
+                    .map_err(|_| Error::CreatePacket("blob in SessionSetup too big".to_owned()))?;
 
                 parameter.put_u16_le(blob_len);
             }
@@ -267,7 +267,7 @@ impl Msg for TreeConnect {
         let password_length: u16 = password
             .len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("password too long".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("password too long".to_owned()))?;
 
         // parameter
         parameter.put_u16_le(self.flags.bits());
@@ -389,7 +389,7 @@ impl Msg for Open {
         let filename_length: u16 = encoded_filename
             .len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("filename too long".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("filename too long".to_owned()))?;
 
         // parameter
         parameter.put_u8(0);    // reserved
@@ -604,17 +604,17 @@ impl<T: trans::SubCmd> Msg for Transact<T> {
         let sub_setup = self.subcmd.setup()?;
         let sub_setup_words: u8 = (sub_setup.len() / 2)
             .try_into()
-            .map_err(|_| Error::CreatePackage("setup of transaction sub-command is too large".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("setup of transaction sub-command is too large".to_owned()))?;
 
         let sub_parameter = self.subcmd.parameter()?;
         let sub_parameter_len: u32 = sub_parameter.len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("parameter of transaction sub-command is too large".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("parameter of transaction sub-command is too large".to_owned()))?;
 
         let sub_data = self.subcmd.data()?;
         let sub_data_len: u32 = sub_data.len()
             .try_into()
-            .map_err(|_| Error::CreatePackage("data of transaction sub-command is too large".to_owned()))?;
+            .map_err(|_| Error::CreatePacket("data of transaction sub-command is too large".to_owned()))?;
 
         // position of data relative to SMB header
         let data_start = SMB_HEADER_LEN
@@ -679,7 +679,7 @@ mod tests {
         let info = Info::default(Negotiate::CMD);
 
         msg.write(&info, &mut buffer)
-            .expect("can't create negotiate package");
+            .expect("can't create negotiate packet");
 
         assert_eq!(buffer.as_ref(), hex!("000c00024e54204c4d20302e313200"));
     }
@@ -715,7 +715,7 @@ mod tests {
         let info = Info::default(SessionSetup::CMD);
 
         msg.write(&info, &mut buffer)
-            .expect("can't create SessionSetup package");
+            .expect("can't create SessionSetup packet");
 
         assert_eq!(buffer.as_ref(), hex!(
             "0cff00000004111000000000000000280000000000d40000a02d004e544c4d53"

@@ -1,8 +1,11 @@
 use std::fmt;
 use std::str::FromStr;
+
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tokio::net::TcpStream;
 use bytes::{Bytes, Buf, BytesMut, BufMut};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
 use crate::utils::encode_netbios_name;
 
 const MAX_FRAME_LENGTH: usize = 0x1ffff;
@@ -59,51 +62,64 @@ enum Frame {
     Keepalive,
 }
 
+#[derive(IntoPrimitive, TryFromPrimitive)]
+#[allow(non_camel_case_types)]
+#[repr(u8)]
+enum FrameType {
+    MESSAGE = 0x00,
+    SESSION_REQUEST = 0x81,
+    POSITIVE_RESPONSE = 0x82,
+    NEGATIVE_RESPONSE = 0x83,
+    RETARGET = 0x84,
+    KEEPALIVE = 0x85,
+}
+
 
 impl Frame {
-    fn new(frame_type: u8, frame_data: Bytes) -> Result<Frame, Error> {
+    fn new(raw_frame_type: u8, frame_data: Bytes) -> Result<Frame, Error> {
+        let frame_type = FrameType::try_from(raw_frame_type)
+            .map_err(|_| Error::InvalidFrameType(raw_frame_type))?;
+
         match frame_type {
-            0x00 => Ok(Frame::Message(frame_data)),
+            FrameType::MESSAGE => Ok(Frame::Message(frame_data)),
 
-            0x81 => Ok(Frame::SessionRequest(frame_data)),
+            FrameType::SESSION_REQUEST => Ok(Frame::SessionRequest(frame_data)),
 
-            0x82 => if frame_data.len() != 0 {
+            FrameType::POSITIVE_RESPONSE => if frame_data.len() != 0 {
                 Err(Error::InvalidFrame)
             } else {
                 Ok(Frame::PositiveResponse)
             },
 
-            0x83 => if frame_data.len() != 1 {
+            FrameType::NEGATIVE_RESPONSE => if frame_data.len() != 1 {
                 Err(Error::InvalidFrame)
             } else {
                 Ok(Frame::NegativeResponse(frame_data[0]))
             }
 
-            0x84 => if frame_data.len() != 6 {
+            FrameType::RETARGET => if frame_data.len() != 6 {
                 Err(Error::InvalidFrame)
             } else {
                 // TODO should parse ip address and port here
                 Ok(Frame::Retarget)
             }
 
-            0x85 => if frame_data.len() != 0 {
+            FrameType::KEEPALIVE => if frame_data.len() != 0 {
                 Err(Error::InvalidFrame)
             } else {
                 Ok(Frame::Keepalive)
             }
-
-            _ => Err(Error::InvalidFrameType(frame_type)),
         }
     }
 
-    fn get_type(&self) -> u8 {
+    fn get_type(&self) -> FrameType {
         match self {
-            Frame::Message(_) => 0x00,
-            Frame::SessionRequest(_) => 0x81,
-            Frame::PositiveResponse => 0x82,
-            Frame::NegativeResponse(_) => 0x83,
-            Frame::Retarget => 0x84,
-            Frame::Keepalive => 0x85,
+            Frame::Message(_) => FrameType::MESSAGE,
+            Frame::SessionRequest(_) => FrameType::SESSION_REQUEST,
+            Frame::PositiveResponse => FrameType::POSITIVE_RESPONSE,
+            Frame::NegativeResponse(_) => FrameType::NEGATIVE_RESPONSE,
+            Frame::Retarget => FrameType::RETARGET,
+            Frame::Keepalive => FrameType::KEEPALIVE,
         }
     }
 
@@ -117,7 +133,7 @@ impl Frame {
                 let n: u32 = msg.len().try_into()?;
 
                 let mut encoding = BytesMut::with_capacity(4 + msg.len());
-                encoding.put_u8(self.get_type());
+                encoding.put_u8(self.get_type().into());
                 encoding.put(&n.to_be_bytes()[1..4]);
                 encoding.put(&msg[..]);
                 Ok(encoding.freeze())
@@ -130,7 +146,7 @@ impl Frame {
                 }
 
                 let mut encoding = BytesMut::with_capacity(4 + msg.len());
-                encoding.put_u8(self.get_type());
+                encoding.put_u8(self.get_type().into());
                 encoding.put(&(u32::try_from(msg.len())?).to_be_bytes()[1..4]);
                 encoding.put(&msg[..]);
                 Ok(encoding.freeze())

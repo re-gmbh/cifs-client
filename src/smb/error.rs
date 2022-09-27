@@ -16,7 +16,7 @@ pub enum Error {
     NoDialect,
     NeedSecurityExt,
     ReplyExpected,
-    CreatePackage(String),
+    CreatePacket(String),
     Reassemble(String),
     Unsupported(String),
 }
@@ -30,7 +30,7 @@ impl fmt::Display for Error {
             Error::NoDialect => write!(f, "no supported dialect found"),
             Error::NeedSecurityExt => write!(f, "need security extension"),
             Error::ReplyExpected => write!(f, "header is marked as request instead of reply"),
-            Error::CreatePackage(whatnow) => write!(f, "error creating package: {}", whatnow),
+            Error::CreatePacket(whatnow) => write!(f, "error creating packet: {}", whatnow),
             Error::Reassemble(desc) => write!(f, "error reassembling transact2 reply: {}", desc),
             Error::Unsupported(what) => write!(f, "unsupported feature: {}", what),
         }
@@ -66,4 +66,3 @@ impl From<utils::ParseStrError> for Error {
         Error::InvalidData
     }
 }
-
