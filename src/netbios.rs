@@ -1,5 +1,4 @@
 use std::fmt;
-use std::str::FromStr;
 
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tokio::net::TcpStream;
@@ -171,25 +170,18 @@ impl NetBios {
     }
 
     pub async fn open(host: &str, myname: &str) -> Result<Self, Error> {
-        if let Ok(mut netbios) = Self::open_raw(host, 139).await {
-            // Port 139 runs the NetBios Session Service: Here we have to
-            // create a session first before doing anything.
+        let netbios = match Self::open_raw(host, 445).await {
+            Ok(nb) => nb,
+            Err(_) => {
+                // Port 139 runs the NetBios Session Service: Here we have to
+                // create a session first before doing anything.
+                let mut nb = Self::open_raw(host, 139).await?;
+                nb.create_session("*SMBSERVER", myname).await?;
+                nb
+            }
+        };
 
-            // derive remote name from hostname: if host is an ip address
-            // we fallback to a constant dummy name.
-            let remote = if let Ok(_) = std::net::IpAddr::from_str(host) {
-                "*SMBSERVER"
-            } else {
-                host
-            };
-
-            netbios.create_session(remote, myname).await?;
-
-            Ok(netbios)
-        } else {
-            // Try port 445 next
-            Self::open_raw(host, 445).await
-        }
+        Ok(netbios)
     }
 
 
