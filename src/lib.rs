@@ -18,6 +18,7 @@ use crate::utils::sanitize_path;
 pub use error::Error;
 pub use ntlm::Auth;
 pub use crate::smb::reply::{Share, Handle};
+pub use trans::NotifyMode;
 
 
 #[derive(Debug)]
@@ -136,13 +137,21 @@ impl Cifs {
     pub async fn notify(&mut self, handle: &Handle)
         -> Result<Vec<(String, NotifyAction)>, Error>
     {
+        self.notify_about(handle, NotifyMode::all()).await
+    }
+
+    pub async fn notify_about(&mut self, handle: &Handle, what: NotifyMode)
+        -> Result<Vec<(String, NotifyAction)>, Error>
+    {
         // sub-command we want to run via SMB transact
-        let cmd = trans::NotifySetup::new(handle.fid, trans::NotifyMode::all(), false);
+        let cmd = trans::NotifySetup::new(handle.fid, what, false);
+
         // get sub-command response via transact
         let reply: trans::Notification = self.transact(handle.tid, cmd).await?;
 
         Ok(reply.changes)
     }
+
 
     /// find_first starts a search for files in the given share for the given pattern.
     ///
