@@ -165,6 +165,7 @@ impl NetBios {
     }
 
     pub async fn open_raw(host: &str, port: u16) -> Result<Self, Error> {
+        tracing::debug!("create NetBios connection to {}:{}", host, port);
         let stream = TcpStream::connect((host, port)).await?;
         Ok(Self::from_stream(stream))
     }
@@ -233,6 +234,8 @@ impl NetBios {
         // read NetBIOS message type
         let msg_type = self.stream.read_u8().await?;
 
+        tracing::debug!("expecting NetBios msg type: {}", msg_type);
+
         // NetBIOS length is given by 3 bytes in big-endian...
         // (well, not really.. but good enough for us)
         let mut raw_length = [0u8; 4];
@@ -241,6 +244,8 @@ impl NetBios {
         if msg_length > MAX_FRAME_LENGTH {
             return Err(Error::FrameTooBig);
         }
+
+        tracing::debug!("expecting NetBios msg of length {}", msg_length);
 
         // read frame payload
         let msg_data = self.read_exactly(msg_length).await?;
@@ -252,6 +257,7 @@ impl NetBios {
     async fn read_exactly(&mut self, mut count: usize)
         -> Result<Bytes, Error>
     {
+        tracing::debug!("reading {} bytes...", count);
         let mut buffer = BytesMut::with_capacity(count);
         let mut chunk = (&mut self.stream).take(count as u64);
 
@@ -268,6 +274,7 @@ impl NetBios {
     }
 
     async fn write_exactly(&mut self, mut buffer: Bytes) -> Result<(), Error> {
+        tracing::debug!("writting {} bytes...", buffer.remaining());
         while buffer.has_remaining() {
             let _ = self.stream.write_buf(&mut buffer).await?;
         }

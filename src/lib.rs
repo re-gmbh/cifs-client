@@ -40,8 +40,7 @@ impl Cifs {
             user: String::new(),
             password: String::new(),
             domain: "WORKGROUP".to_owned(),
-            workstation: std::env::var("HOSTNAME")
-                .unwrap_or("localhost".to_owned()),
+            workstation: "ANONYMOUS".to_owned(),
         });
 
         let netbios = match port {
@@ -147,6 +146,7 @@ impl Cifs {
         let cmd = trans::NotifySetup::new(handle.fid, what, false);
 
         // get sub-command response via transact
+        tracing::debug!("waiting for {:?} notification", what);
         let reply: trans::Notification = self.transact(handle.tid, cmd).await?;
 
         Ok(reply.changes)
