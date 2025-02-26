@@ -1,25 +1,27 @@
-pub mod win;
 mod error;
+mod netbios;
 mod ntlm;
 mod smb;
-mod netbios;
 mod utils;
+pub mod win;
 
 use bytes::{Bytes, BytesMut};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::win::{NotifyAction, NTStatus, FileAttr};
 use crate::netbios::NetBios;
-use crate::smb::info::{Info, Cmd, Status, Flags2};
+use crate::smb::info::{Cmd, Flags2, Info, Status};
 use crate::smb::{msg, reply, trans, trans2, Capabilities, DirInfo};
 use crate::utils::sanitize_path;
+use crate::win::{FileAttr, NTStatus, NotifyAction};
 
+pub use crate::smb::reply::{Handle, Share};
 pub use error::Error;
+pub use netbios::Error as NetbiosError;
 pub use ntlm::Auth;
-pub use crate::smb::reply::{Share, Handle};
+pub use ntlm::Error as NtlmError;
+pub use smb::Error as SmbError;
 pub use trans::NotifyMode;
-
 
 #[derive(Debug)]
 pub struct Cifs {
@@ -33,9 +35,11 @@ pub struct Cifs {
 }
 
 impl Cifs {
-    pub async fn open(host: &str, port: Option<u16>, maybe_auth: Option<Auth>)
-        -> Result<Self, Error>
-    {
+    pub async fn open(
+        host: &str,
+        port: Option<u16>,
+        maybe_auth: Option<Auth>,
+    ) -> Result<Self, Error> {
         let auth = maybe_auth.unwrap_or(Auth {
             user: String::new(),
             password: String::new(),
@@ -63,15 +67,16 @@ impl Cifs {
         Ok(cifs)
     }
 
-
     pub async fn mount(&mut self, path: &str) -> Result<Share, Error> {
         self.mount_password(path, "").await
     }
 
-    pub async fn mount_password(&mut self, path: &str, password: &str)
-        -> Result<Share, Error>
-    {
-        self.command(msg::TreeConnect::new(sanitize_path(path), password.to_owned())).await
+    pub async fn mount_password(&mut self, path: &str, password: &str) -> Result<Share, Error> {
+        self.command(msg::TreeConnect::new(
+            sanitize_path(path),
+            password.to_owned(),
+        ))
+        .await
     }
 
     pub async fn umount_ref(&mut self, share: &Share) -> Result<(), Error> {
@@ -83,16 +88,14 @@ impl Cifs {
         self.umount_ref(&share).await
     }
 
-    pub async fn openfile(&mut self, share: &Share, path: &str)
-        -> Result<Handle, Error>
-    {
-        self.command(msg::Open::file_ro(share.tid, sanitize_path(path))).await
+    pub async fn openfile(&mut self, share: &Share, path: &str) -> Result<Handle, Error> {
+        self.command(msg::Open::file_ro(share.tid, sanitize_path(path)))
+            .await
     }
 
-    pub async fn opendir(&mut self, share: &Share, path: &str)
-        -> Result<Handle, Error>
-    {
-        self.command(msg::Open::dir(share.tid, sanitize_path(path))).await
+    pub async fn opendir(&mut self, share: &Share, path: &str) -> Result<Handle, Error> {
+        self.command(msg::Open::dir(share.tid, sanitize_path(path)))
+            .await
     }
 
     pub async fn close_ref(&mut self, file: &Handle) -> Result<(), Error> {
@@ -103,7 +106,6 @@ impl Cifs {
     pub async fn close(&mut self, file: Handle) -> Result<(), Error> {
         self.close_ref(&file).await
     }
-
 
     pub async fn read(&mut self, file: &Handle, offset: u64) -> Result<Bytes, Error> {
         let reply: reply::Read = self.command(msg::Read::handle(file, offset)).await?;
@@ -124,24 +126,28 @@ impl Cifs {
     }
 
     pub async fn delete(&mut self, share: &Share, path: &str) -> Result<(), Error> {
-        let _: reply::Delete = self.command(msg::Delete::file(share.tid, sanitize_path(path))).await?;
+        let _: reply::Delete = self
+            .command(msg::Delete::file(share.tid, sanitize_path(path)))
+            .await?;
         Ok(())
     }
 
     pub async fn rmdir(&mut self, share: &Share, path: &str) -> Result<(), Error> {
-        let _: reply::Rmdir = self.command(msg::Rmdir::new(share.tid, sanitize_path(path))).await?;
+        let _: reply::Rmdir = self
+            .command(msg::Rmdir::new(share.tid, sanitize_path(path)))
+            .await?;
         Ok(())
     }
 
-    pub async fn notify(&mut self, handle: &Handle)
-        -> Result<Vec<(String, NotifyAction)>, Error>
-    {
+    pub async fn notify(&mut self, handle: &Handle) -> Result<Vec<(String, NotifyAction)>, Error> {
         self.notify_about(handle, NotifyMode::all()).await
     }
 
-    pub async fn notify_about(&mut self, handle: &Handle, what: NotifyMode)
-        -> Result<Vec<(String, NotifyAction)>, Error>
-    {
+    pub async fn notify_about(
+        &mut self,
+        handle: &Handle,
+        what: NotifyMode,
+    ) -> Result<Vec<(String, NotifyAction)>, Error> {
         // sub-command we want to run via SMB transact
         let cmd = trans::NotifySetup::new(handle.fid, what, false);
 
@@ -152,7 +158,6 @@ impl Cifs {
         Ok(reply.changes)
     }
 
-
     /// find_first starts a search for files in the given share for the given pattern.
     ///
     /// It returns a FindFirst2 structure r, with:
@@ -162,9 +167,11 @@ impl Cifs {
     ///   If r.end is false, r.info holds a partial result and self.find_next()
     ///   must be used with r.sid as search id.
     ///
-    pub async fn find_first(&mut self, share: &Share, pattern: &str)
-        -> Result<trans2::subreply::FindFirst2, Error>
-    {
+    pub async fn find_first(
+        &mut self,
+        share: &Share,
+        pattern: &str,
+    ) -> Result<trans2::subreply::FindFirst2, Error> {
         let search_flags = FileAttr::HIDDEN | FileAttr::SYSTEM | FileAttr::DIRECTORY;
         let subcmd = trans2::subcmd::FindFirst2::new(sanitize_path(pattern), search_flags);
         self.transact2(share.tid, subcmd).await
@@ -179,21 +186,21 @@ impl Cifs {
     ///   r.end is true if the search is done (otherwise find_next needs to be
     ///   called again).
     ///
-    pub async fn find_next(&mut self, share: &Share, sid: u16, lastfile: &str)
-        -> Result<trans2::subreply::FindNext2, Error>
-    {
+    pub async fn find_next(
+        &mut self,
+        share: &Share,
+        sid: u16,
+        lastfile: &str,
+    ) -> Result<trans2::subreply::FindNext2, Error> {
         let subcmd = trans2::subcmd::FindNext2::new(sid, lastfile);
         self.transact2(share.tid, subcmd).await
     }
-
 
     /// list is a high-level command doing a file-search for the given pattern in the
     /// given share. It returns a complete list of DirInfo, representing the search
     /// result. If more control is needed, use the more low-level find_first/find_next
     /// methods.
-    pub async fn list(&mut self, share: &Share, pattern: &str)
-        -> Result<Vec<DirInfo>, Error>
-    {
+    pub async fn list(&mut self, share: &Share, pattern: &str) -> Result<Vec<DirInfo>, Error> {
         let reply = self.find_first(share, pattern).await?;
         if reply.end {
             return Ok(reply.info);
@@ -204,7 +211,9 @@ impl Cifs {
         let mut result = reply.info;
 
         loop {
-            let mut reply = self.find_next(share, sid, &result.last().unwrap().filename).await?;
+            let mut reply = self
+                .find_next(share, sid, &result.last().unwrap().filename)
+                .await?;
 
             result.append(&mut reply.info);
             if reply.end {
@@ -214,8 +223,6 @@ impl Cifs {
 
         Ok(result)
     }
-
-
 
     //
     // private functions
@@ -227,7 +234,10 @@ impl Cifs {
         self.max_smb_size = server_setup.max_buffer_size as usize;
         self.use_unicode = server_setup.capabilities.contains(Capabilities::UNICODE);
 
-        if server_setup.capabilities.contains(Capabilities::EXTENDED_SECURITY) {
+        if server_setup
+            .capabilities
+            .contains(Capabilities::EXTENDED_SECURITY)
+        {
             self.authenticate_ntlmv2().await
         } else {
             self.authenticate_ntlm(server_setup.challenge).await
@@ -236,28 +246,30 @@ impl Cifs {
 
     async fn authenticate_ntlm(&mut self, challenge: Bytes) -> Result<(), Error> {
         // TODO: can we do this without clone?
-        let setup_reply = self.session_setup(
-            self.auth.user.clone(),
-            self.auth.domain.clone(),
-            self.auth.ntlmv1_authenticate(challenge.as_ref()),
-        ).await?;
+        let setup_reply = self
+            .session_setup(
+                self.auth.user.clone(),
+                self.auth.domain.clone(),
+                self.auth.ntlmv1_authenticate(challenge.as_ref()),
+            )
+            .await?;
 
         self.uid = setup_reply.uid;
 
         Ok(())
     }
 
-
     async fn authenticate_ntlmv2(&mut self) -> Result<(), Error> {
         // initialize ntlm (also called type 1 message)
         let ntlm_init = {
             let mut ntlm_init_msg = ntlm::InitMsg::new(
-                 ntlm::Flags::UNICODE
-               | ntlm::Flags::OEM
-               | ntlm::Flags::REQUEST_TARGET
-               | ntlm::Flags::NTLM
-               | ntlm::Flags::DOMAIN_SUPPLIED
-               | ntlm::Flags::WORKSTATION_SUPPLIED);
+                ntlm::Flags::UNICODE
+                    | ntlm::Flags::OEM
+                    | ntlm::Flags::REQUEST_TARGET
+                    | ntlm::Flags::NTLM
+                    | ntlm::Flags::DOMAIN_SUPPLIED
+                    | ntlm::Flags::WORKSTATION_SUPPLIED,
+            );
 
             ntlm_init_msg.set_origin(&self.auth.domain, &self.auth.workstation);
             ntlm_init_msg.set_default_version();
@@ -278,7 +290,6 @@ impl Cifs {
 
         Ok(())
     }
-
 
     /// sends a message to server and returns mid used to send it.
     async fn send<M: msg::Msg>(&mut self, msg: M) -> Result<u16, Error> {
@@ -302,7 +313,6 @@ impl Cifs {
 
         Ok(mid)
     }
-
 
     /// receives a reply of type R and given mid.
     ///
@@ -339,14 +349,12 @@ impl Cifs {
         R::parse(info, body).map_err(|e| e.into())
     }
 
-
-
     /// Sends a generic message M and expects result generic R. There is no
     /// check that M and R "fit" together (like M::CMD == R::CMD), so this
     /// is clearly not meant to be a public method.
     /// We built safe wrapper around command, with correct message and reply
     /// types.
-    async fn command<M,R>(&mut self, msg: M) -> Result<R, Error>
+    async fn command<M, R>(&mut self, msg: M) -> Result<R, Error>
     where
         M: msg::Msg,
         R: reply::Reply,
@@ -355,7 +363,7 @@ impl Cifs {
         self.recv(mid).await
     }
 
-    async fn transact<C,R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
+    async fn transact<C, R>(&mut self, tid: u16, cmd: C) -> Result<R, Error>
     where
         C: trans::SubCmd,
         R: trans::SubReply,
@@ -366,8 +374,7 @@ impl Cifs {
         Ok(reply.subcmd)
     }
 
-
-    async fn transact2<C,R>(&mut self, tid: u16, subcmd: C) -> Result<R, Error>
+    async fn transact2<C, R>(&mut self, tid: u16, subcmd: C) -> Result<R, Error>
     where
         C: trans2::SubCmd,
         R: trans2::SubReply,
@@ -383,29 +390,29 @@ impl Cifs {
             if ctx.add(reply)? {
                 break;
             }
-        };
+        }
 
         Ok(ctx.get_subreply()?)
     }
 
     async fn negotiate(&mut self) -> Result<reply::ServerSetup, Error> {
-        self.command(msg::Negotiate{}).await
+        self.command(msg::Negotiate {}).await
     }
 
-    async fn session_setup(&mut self, user: String, domain: String, secret: [u8; 24])
-        -> Result<reply::SessionSetup, Error>
-    {
-        self.command(msg::SessionSetup::with_auth(user, domain, secret)).await
+    async fn session_setup(
+        &mut self,
+        user: String,
+        domain: String,
+        secret: [u8; 24],
+    ) -> Result<reply::SessionSetup, Error> {
+        self.command(msg::SessionSetup::with_auth(user, domain, secret))
+            .await
     }
 
-    async fn session_setup_ntlmv2(&mut self, blob: Bytes)
-        -> Result<reply::SessionSetup, Error>
-    {
+    async fn session_setup_ntlmv2(&mut self, blob: Bytes) -> Result<reply::SessionSetup, Error> {
         self.command(msg::SessionSetup::with_blob(blob)).await
     }
 }
-
-
 
 /// Struct for holding the result of resolve_smb_uri
 pub struct CifsConfig<'a> {
@@ -418,7 +425,6 @@ pub struct CifsConfig<'a> {
     pub path: Option<&'a str>,
 }
 
-
 ///
 /// Helper function that decodes an SMB URI and returns a CifsConfig
 ///
@@ -429,28 +435,16 @@ pub fn resolve_smb_uri<'a>(uri: &'a str) -> Result<CifsConfig<'a>, Error> {
                 .expect("can't compile URI regex");
     }
 
-    let uri_match = URI_REGEX
-        .captures(uri)
-        .ok_or(Error::InvalidUri)?;
-
+    let uri_match = URI_REGEX.captures(uri).ok_or(Error::InvalidUri)?;
 
     let config = CifsConfig {
-        domain: uri_match
-            .name("domain")
-            .map(|m| m.as_str()),
+        domain: uri_match.name("domain").map(|m| m.as_str()),
 
-        user: uri_match
-            .name("user")
-            .map(|m| m.as_str()),
+        user: uri_match.name("user").map(|m| m.as_str()),
 
-        password: uri_match
-            .name("passwd")
-            .map(|m| m.as_str()),
+        password: uri_match.name("passwd").map(|m| m.as_str()),
 
-        hostname: uri_match
-            .name("host")
-            .ok_or(Error::InvalidUri)?
-            .as_str(),
+        hostname: uri_match.name("host").ok_or(Error::InvalidUri)?.as_str(),
 
         port: uri_match
             .name("port")
@@ -458,19 +452,13 @@ pub fn resolve_smb_uri<'a>(uri: &'a str) -> Result<CifsConfig<'a>, Error> {
             .transpose()
             .map_err(|_| Error::InvalidUri)?,
 
-        share: uri_match
-            .name("share")
-            .ok_or(Error::InvalidUri)?
-            .as_str(),
+        share: uri_match.name("share").ok_or(Error::InvalidUri)?.as_str(),
 
-        path: uri_match
-            .name("path")
-            .map(|m| m.as_str()),
+        path: uri_match.name("path").map(|m| m.as_str()),
     };
 
     Ok(config)
 }
-
 
 #[cfg(test)]
 mod tests {
