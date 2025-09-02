@@ -1,0 +1,20 @@
+---
+
+name: Build and test this Rust crate with Nix
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  building_it:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: re-gmbh/install-nix-action@master
+      - run: nix build
+      - run: nix flake check
